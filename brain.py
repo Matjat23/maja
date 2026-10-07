@@ -16,7 +16,7 @@ class BrainError(Exception):
 
 class OllamaBrain:
     def __init__(self, model=None, host=None, timeout=300):
-        self.model = model or os.getenv("MAJA_MODEL", "llama3")
+        self.model = model or os.getenv("MAJA_MODEL", "llama3.1")
         self.host = (host or os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
         if not self.host.startswith("http"):
             self.host = "http://" + self.host
@@ -47,19 +47,31 @@ class OllamaBrain:
         except TimeoutError as error:
             raise BrainError("The model took too long to answer. Please try again.") from error
 
+    def _chat(self, messages, **extra):
+        data = self._post("/api/chat", {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "keep_alive": "30m",
+            **extra,
+        })
+        return (data.get("message") or {}).get("content", "").strip()
+
     def warm_up(self):
         """Load the model into memory so the first real reply is fast."""
         self._post("/api/generate", {"model": self.model, "keep_alive": "30m"})
 
     def chat(self, messages):
         """Send a list of {'role', 'content'} messages and return the reply text."""
-        data = self._post("/api/chat", {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "keep_alive": "30m",
-        })
-        reply = (data.get("message") or {}).get("content", "").strip()
+        reply = self._chat(messages)
         if not reply:
             raise BrainError("The model sent an empty reply. Please try again.")
         return reply
+
+    def extract(self, messages, schema):
+        """Ask for an answer shaped like the JSON `schema` and return it as a dict."""
+        reply = self._chat(messages, format=schema, options={"temperature": 0})
+        try:
+            return json.loads(reply)
+        except json.JSONDecodeError as error:
+            raise BrainError("The model sent an answer I couldn't read.") from error

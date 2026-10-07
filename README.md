@@ -7,17 +7,20 @@ Maja is Matty's personal assistant project. This first version runs on a compute
 ## Run it on Windows in VS Code
 
 1. Install Python 3.11 or newer from python.org and select **Add Python to PATH** during installation.
-2. Install [Ollama](https://ollama.com), then download Maja's AI model once: `ollama pull llama3` (about 4.7 GB).
+2. Install [Ollama](https://ollama.com), then download Maja's AI model once: `ollama pull llama3.1` (about 4.9 GB).
 3. Open this folder in VS Code.
 4. Open **Terminal → New Terminal**.
 5. Run `python main.py` (or `py main.py` if Windows does not recognize `python`).
 
-No Python packages, account, or API key are needed, and the AI runs entirely on your own computer. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=llama3.1`).
+No Python packages, account, or API key are needed, and the AI runs entirely on your own computer. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`). Models without tool support, such as `llama3`, still chat but can't save notes or tasks on their own.
 
-The app creates `maja_data.json` next to `main.py` to store your notes and tasks on your own computer. Do not commit that personal file to GitHub.
+The app creates `maja_data.json` next to `main.py` to store your notes, tasks, and recent conversation on your own computer. Do not commit that personal file to GitHub.
 
 ## Try these messages
 
+- `I want to practice English every day` (Maja saves it as a note)
+- `Remind me to buy running shoes` (Maja adds a task)
+- `I bought the shoes!` (Maja marks the task as done)
 - `hello`
 - `remember I want Maja to help me practice English`
 - `what do you remember?`
@@ -38,11 +41,11 @@ The tests use a fake AI model, so they don't need Ollama. GitHub runs them autom
 
 ## What this version does
 
-The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3 through Ollama), which also knows your saved notes and open tasks. It does **not** hear speech, see through a camera, or control hardware yet.
+The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks and can save notes, add tasks, and finish tasks while you chat. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. It does **not** hear speech, see through a camera, or control hardware yet.
 
 ## Next milestones
 
-1. ~~Add a model provider so Maja can hold open-ended conversations.~~ Done (local llama3 via Ollama, `brain.py`).
+1. ~~Add a model provider so Maja can hold open-ended conversations.~~ Done (local llama3.1 via Ollama, `brain.py`), including saving notes and tasks from normal conversation.
 2. Add microphone input and spoken replies.
 3. Add camera input with a visible on/off control.
 4. Prototype the enclosure in CAD, then connect sensors and actuators through a hardware adapter.

@@ -101,7 +101,15 @@ def main():
                             font=("Segoe UI", 10, "bold"), relief="flat", padx=17)
     send_button.pack(side="left", padx=(8, 0), ipady=8)
     entry.bind("<Return>", send)
-    append("Maja", "Hi Matty! Ask me anything, or type 'help' to see my commands. 💜", "maja")
+    for past in maja.history:
+        if past["role"] == "user":
+            append("You", past["content"])
+        else:
+            append("Maja", past["content"], "maja")
+    if maja.history:
+        append("Maja", "Welcome back, Matty! Type 'new chat' anytime for a fresh start. 💜", "maja")
+    else:
+        append("Maja", "Hi Matty! Talk to me about anything, or type 'help' to see what I can do. 💜", "maja")
     entry.focus_set()
     threading.Thread(target=warm_up, daemon=True).start()
     root.mainloop()
