@@ -1,10 +1,11 @@
 """Local command and memory layer for the Maja prototype."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from brain import BrainError
+from reminders import DUE_FORMAT, describe_due, guess_due, parse_due
 
 
 # How many recent chat messages Maja keeps in mind (and saves) between conversations.
@@ -15,30 +16,60 @@ MEMORY_SCHEMA = {
     "type": "object",
     "properties": {
         "notes": {"type": "array", "items": {"type": "string"}},
-        "new_tasks": {"type": "array", "items": {"type": "string"}},
+        "new_tasks": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}, "due": {"type": "string"}},
+            "required": ["text", "due"],
+        }},
         "finished_task_numbers": {"type": "array", "items": {"type": "integer"}},
     },
     "required": ["notes", "new_tasks", "finished_task_numbers"],
 }
 
-MEMORY_RULES = """You update Matty's personal notes and to-do list. Read ONLY Matty's latest message and decide what to store.
+
+def memory_rules(now):
+    """Instructions for the save step. They include real dates, so the model can
+    turn 'Saturday at 6pm' into an exact time without doing calendar math."""
+    days = "\n".join(
+        f"- {label}{(now + timedelta(days=i)):%A %Y-%m-%d}"
+        for i, label in enumerate(["today: ", "tomorrow: "] + [""] * 6)
+    )
+    friday = next(now + timedelta(days=i) for i in range(1, 8) if (now + timedelta(days=i)).weekday() == 4)
+    monday = next(now + timedelta(days=i) for i in range(1, 8) if (now + timedelta(days=i)).weekday() == 0)
+    tomorrow = now + timedelta(days=1)
+    return f"""You update Matty's personal notes and to-do list. Read ONLY Matty's latest message and decide what to store.
 
 Rules:
 - notes: only lasting personal facts, goals, or preferences that Matty states about themself, or things Matty explicitly asks to remember. Write them as short sentences about Matty.
-- new_tasks: only things Matty asks to be reminded of or says they need to do. Start with a verb and keep any day or time Matty mentions.
+- new_tasks: only things Matty asks to be reminded of or says they need to do. "text" starts with a verb and leaves out the date and time.
+- "due": when Matty says when (a day and/or a time), write it as "YYYY-MM-DD HH:MM" using the calendar below. Only a day: use 09:00. Only a time: today, or tomorrow if that time has passed. "In 2 hours" etc.: add it to the current time. No day or time mentioned: "".
 - finished_task_numbers: numbers of open tasks from the list that Matty says they completed.
 - Questions, greetings, small talk and requests for information or advice store NOTHING.
 - Don't repeat notes that are already saved.
 - When unsure, store nothing. Most messages store nothing.
 
+Now: {now:%A %Y-%m-%d %H:%M}
+Calendar:
+{days}
+
 Examples:
-"How are you?" -> {"notes": [], "new_tasks": [], "finished_task_numbers": []}
-"What should I eat before an exam?" -> {"notes": [], "new_tasks": [], "finished_task_numbers": []}
-"Translate 'thank you' to French" -> {"notes": [], "new_tasks": [], "finished_task_numbers": []}
-"I love hiking on weekends" -> {"notes": ["Matty loves hiking on weekends"], "new_tasks": [], "finished_task_numbers": []}
-"Remind me to email my teacher on Friday" -> {"notes": [], "new_tasks": ["Email my teacher on Friday"], "finished_task_numbers": []}
-With open task "2. Pay rent": "I paid the rent" -> {"notes": [], "new_tasks": [], "finished_task_numbers": [2]}
+"How are you?" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
+"What should I eat before an exam?" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
+"Translate 'thank you' to French" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
+"I love hiking on weekends" -> {{"notes": ["Matty loves hiking on weekends"], "new_tasks": [], "finished_task_numbers": []}}
+"I need to clean my room" -> {{"notes": [], "new_tasks": [{{"text": "Clean my room", "due": ""}}], "finished_task_numbers": []}}
+"I have to hand in my essay by Monday" -> {{"notes": [], "new_tasks": [{{"text": "Hand in my essay", "due": "{monday:%Y-%m-%d} 09:00"}}], "finished_task_numbers": []}}
+"Remind me to email my teacher on Friday" -> {{"notes": [], "new_tasks": [{{"text": "Email my teacher", "due": "{friday:%Y-%m-%d} 09:00"}}], "finished_task_numbers": []}}
+"Remind me tomorrow at 7pm to call grandma" -> {{"notes": [], "new_tasks": [{{"text": "Call grandma", "due": "{tomorrow:%Y-%m-%d} 19:00"}}], "finished_task_numbers": []}}
+With open task "2. Pay rent": "I paid the rent" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": [2]}}
 """
+
+
+def task_label(task):
+    """'Call mom' or, with a due date, 'Call mom (⏰ Sat 10 Oct, 18:00)'."""
+    if task.get("due"):
+        return f"{task['text']} (⏰ {describe_due(task['due'])})"
+    return task["text"]
 
 
 class Maja:
@@ -69,6 +100,13 @@ class Maja:
         temporary.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.data_file)
 
+    def setting(self, name, default=None):
+        return self.data.get("settings", {}).get(name, default)
+
+    def change_setting(self, name, value):
+        self.data.setdefault("settings", {})[name] = value
+        self._save()
+
     def _add_note(self, note):
         if note.lower().rstrip(".") in (n.lower().rstrip(".") for n in self.data["notes"]):
             return False
@@ -76,9 +114,28 @@ class Maja:
         self._save()
         return True
 
-    def _add_task(self, text):
-        self.data["tasks"].append({"text": text, "done": False})
+    def _add_task(self, text, due=None):
+        task = {"text": text, "done": False}
+        if due:
+            task["due"] = due.strftime(DUE_FORMAT)
+        self.data["tasks"].append(task)
         self._save()
+        return task
+
+    def due_reminders(self, now=None):
+        """Return open tasks that are due and haven't been reminded about yet.
+
+        Each one is marked as reminded, so it only pops up once.
+        """
+        now = now or datetime.now()
+        due = [task for task in self.data["tasks"]
+               if task.get("due") and not task["done"] and not task.get("reminded")
+               and datetime.strptime(task["due"], DUE_FORMAT) <= now]
+        for task in due:
+            task["reminded"] = True
+        if due:
+            self._save()
+        return due
 
     def _finish_task(self, number):
         """Mark task `number` (1-based) as done and return it, or None if it doesn't exist."""
@@ -123,7 +180,7 @@ class Maja:
         if lower in {"show tasks", "my tasks"}:
             tasks = self.data["tasks"]
             return ("Your tasks:\n" + "\n".join(
-                f"{i}. {'✓' if task['done'] else '○'} {task['text']}"
+                f"{i}. {'✓' if task['done'] else '○'} {task_label(task)}"
                 for i, task in enumerate(tasks, 1))) if tasks else "Your task list is empty."
         if lower.startswith("finish task "):
             try:
@@ -143,7 +200,7 @@ class Maja:
     def _notes_and_tasks(self):
         notes = "\n".join(f"- {note}" for note in self.data["notes"]) or "(none yet)"
         tasks = "\n".join(
-            f"{i}. {task['text']}" for i, task in enumerate(self.data["tasks"], 1) if not task["done"]
+            f"{i}. {task_label(task)}" for i, task in enumerate(self.data["tasks"], 1) if not task["done"]
         ) or "(none)"
         return f"Saved notes about Matty:\n{notes}\nMatty's open tasks:\n{tasks}"
 
@@ -156,7 +213,7 @@ class Maja:
         if self.history and self.history[-1]["role"] == "assistant":
             context = f"Maja's previous message (context only, store nothing from it):\n{self.history[-1]['content']}\n\n"
         changes = self.brain.extract([
-            {"role": "system", "content": MEMORY_RULES + "\n" + self._notes_and_tasks()},
+            {"role": "system", "content": memory_rules(datetime.now()) + "\n" + self._notes_and_tasks()},
             {"role": "user", "content": f"{context}Matty's latest message:\n{message}"},
         ], MEMORY_SCHEMA)
 
@@ -164,10 +221,15 @@ class Maja:
         for note in changes.get("notes") or []:
             if isinstance(note, str) and note.strip() and self._add_note(note.strip()):
                 receipts.append(f"📝 Saved note: {note.strip()}")
-        for text in changes.get("new_tasks") or []:
-            if isinstance(text, str) and text.strip():
-                self._add_task(text.strip())
-                receipts.append(f"✅ Added task: {text.strip()}")
+        new_tasks = [task for task in changes.get("new_tasks") or []
+                     if isinstance(task, dict) and str(task.get("text", "")).strip()]
+        for new_task in new_tasks:
+            due = parse_due(new_task.get("due", ""))
+            if len(new_tasks) == 1:
+                # Plain-Python date reading is more reliable than the model when it finds a time.
+                due = guess_due(message) or due
+            task = self._add_task(str(new_task["text"]).strip(), due)
+            receipts.append(f"✅ Added task: {task_label(task)}")
         for number in changes.get("finished_task_numbers") or []:
             tasks = self.data["tasks"]
             if isinstance(number, int) and 1 <= number <= len(tasks) and not tasks[number - 1]["done"]:
@@ -188,8 +250,9 @@ class Maja:
             "conversations or saved items that actually appear below or in this chat; "
             "never invent them. For money or health topics, give general guidance, not "
             "professional advice.\n\n"
-            "Maja's app keeps a list of notes and tasks. It can't send reminders or "
-            "notifications, so never promise them.\n\n"
+            "Maja's app keeps a list of notes and tasks. Tasks with a ⏰ time get a "
+            "notification at that time, but only while the Maja app is open. Tasks without "
+            "a time get no reminder.\n\n"
             f"Current local time: {datetime.now():%A %Y-%m-%d %H:%M}\n"
             f"{saved_before}\n\n"
             "Just saved for the first time from Matty's latest message (Matty already "

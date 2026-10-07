@@ -1,0 +1,5 @@
+# Optional: only needed to talk to Maja with the microphone (🎤).
+# Typing, the AI, reminders and spoken replies work without these.
+faster-whisper>=1.2
+sounddevice>=0.5
+numpy>=2.0

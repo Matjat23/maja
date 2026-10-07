@@ -1,4 +1,4 @@
-"""Start Maja's first desktop window with: python main.py"""
+"""Start Maja's desktop window with: python main.py"""
 
 from pathlib import Path
 import queue
@@ -7,13 +7,19 @@ import tkinter as tk
 from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
-from maja import Maja
+from maja import Maja, task_label
+from reminders import describe_due, notify
+from voice import VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE, Listener, Speaker, VoiceError
 
 
 BG = "#1b1525"
 PANEL = "#2a2038"
 PINK = "#f4a4d4"
 WHITE = "#f8f1fa"
+RED = "#ff6b81"
+GREY = "#6f6480"
+SUBTITLE = "Your assistant, one step at a time"
+REMINDER_CHECK_MS = 15_000
 
 
 def main():
@@ -27,15 +33,18 @@ def main():
         root.destroy()
         return
 
+    listener = Listener() if VOICE_INPUT_AVAILABLE else None
+    speaker = Speaker()
+
     root = tk.Tk()
     root.title("Maja 💜")
-    root.geometry("620x520")
-    root.minsize(420, 360)
+    root.geometry("660x560")
+    root.minsize(460, 380)
     root.configure(bg=BG)
 
     title = tk.Label(root, text="Maja  ✨", font=("Segoe UI", 24, "bold"), bg=BG, fg=PINK)
     title.pack(anchor="w", padx=22, pady=(18, 2))
-    subtitle = tk.Label(root, text="Your assistant, one step at a time", font=("Segoe UI", 10), bg=BG, fg=WHITE)
+    subtitle = tk.Label(root, text=SUBTITLE, font=("Segoe UI", 10), bg=BG, fg=WHITE)
     subtitle.pack(anchor="w", padx=24, pady=(0, 12))
 
     conversation = tk.Text(root, wrap="word", bg=PANEL, fg=WHITE, insertbackground=WHITE,
@@ -49,58 +58,138 @@ def main():
                      font=("Segoe UI", 11), relief="flat")
     entry.pack(side="left", fill="x", expand=True, ipady=11)
 
-    def append(speaker, text, tag=None):
+    def append(speaker_name, text, tag=None):
         conversation.configure(state="normal")
-        conversation.insert("end", f"{speaker}: {text}\n\n", tag)
+        conversation.insert("end", f"{speaker_name}: {text}\n\n", tag)
         conversation.configure(state="disabled")
         conversation.see("end")
 
-    # The AI model can take a few seconds, so replies are made on a background
-    # thread and handed back to the window through this queue.
-    replies = queue.Queue()
+    def maja_says(text):
+        append("Maja", text, "maja")
+        if maja.setting("speak", False):
+            speaker.speak(text)
+
+    # Slow work (the AI model, speech recognition) runs on background threads. They hand
+    # results back through this queue, because only the main thread may touch the window.
+    ui_calls = queue.Queue()
+
+    def run_ui_calls():
+        while True:
+            try:
+                ui_calls.get_nowait()()
+            except queue.Empty:
+                break
+        root.after(100, run_ui_calls)
+
+    def in_background(work):
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- Typing and sending ---------------------------------------------------------
     busy = False
 
-    def think(message):
-        try:
-            replies.put(maja.reply(message))
-        except OSError as error:
-            replies.put(f"I couldn't save that. Please check the folder permissions: {error}")
-
-    def check_replies():
+    def set_busy(value, status=SUBTITLE):
         nonlocal busy
-        try:
-            answer = replies.get_nowait()
-        except queue.Empty:
-            root.after(100, check_replies)
-            return
-        append("Maja", answer, "maja")
-        busy = False
-        subtitle.configure(text="Your assistant, one step at a time")
-        send_button.configure(state="normal")
+        busy = value
+        subtitle.configure(text=status)
+        state = "disabled" if value else "normal"
+        send_button.configure(state=state)
+        mic_button.configure(state=state)
 
     def send(event=None):
-        nonlocal busy
         message = entry.get().strip()
         if not message or busy:
             return
-        busy = True
         entry.delete(0, "end")
         append("You", message)
-        subtitle.configure(text="Maja is thinking…")
-        send_button.configure(state="disabled")
-        threading.Thread(target=think, args=(message,), daemon=True).start()
-        root.after(100, check_replies)
+        speaker.stop()
+        set_busy(True, "Maja is thinking…")
 
-    def warm_up():
-        try:
-            brain.warm_up()
-        except BrainError:
-            pass  # The real error message is shown when Matty sends a message.
+        def think():
+            try:
+                answer = maja.reply(message)
+            except OSError as error:
+                answer = f"I couldn't save that. Please check the folder permissions: {error}"
+            ui_calls.put(lambda: (set_busy(False), maja_says(answer)))
+
+        in_background(think)
 
     send_button = tk.Button(row, text="Send", command=send, bg=PINK, fg=BG,
                             font=("Segoe UI", 10, "bold"), relief="flat", padx=17)
     send_button.pack(side="left", padx=(8, 0), ipady=8)
     entry.bind("<Return>", send)
+
+    # --- Voice: 🎤 to talk, 🔊 to hear Maja ------------------------------------------
+    listening = False
+
+    def toggle_listening():
+        nonlocal listening
+        if listener is None:
+            maja_says("Talking to me needs a few extra packages. In a terminal, run: "
+                      "py -m pip install -r requirements.txt  — then restart me.")
+            return
+        if not listening:
+            try:
+                listener.start()
+            except VoiceError as error:
+                maja_says(str(error))
+                return
+            listening = True
+            speaker.stop()
+            mic_button.configure(text="■", bg=RED)
+            send_button.configure(state="disabled")
+            subtitle.configure(text="Listening… click ■ when you're done")
+            return
+        listening = False
+        mic_button.configure(text="🎤", bg=PANEL)
+        set_busy(True, "Turning your voice into text…")
+
+        def transcribe():
+            try:
+                text, problem = listener.stop(), None
+            except VoiceError as error:
+                text, problem = "", str(error)
+
+            def show():
+                set_busy(False)
+                if problem:
+                    maja_says(problem)
+                elif not text:
+                    subtitle.configure(text="I didn't catch that. Try again, a bit closer to the mic.")
+                else:
+                    entry.delete(0, "end")
+                    entry.insert(0, text)
+                    send()
+
+            ui_calls.put(show)
+
+        in_background(transcribe)
+
+    def toggle_speaking():
+        speak = not maja.setting("speak", False)
+        maja.change_setting("speak", speak)
+        speak_button.configure(text="🔊" if speak else "🔇", bg=PINK if speak else PANEL)
+        if not speak:
+            speaker.stop()
+
+    mic_button = tk.Button(row, text="🎤", command=toggle_listening, bg=PANEL, fg=WHITE,
+                           font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    mic_button.pack(side="left", padx=(8, 0), ipady=3)
+    speaking = maja.setting("speak", False)
+    speak_button = tk.Button(row, text="🔊" if speaking else "🔇", command=toggle_speaking,
+                             bg=PINK if speaking else PANEL, fg=WHITE,
+                             font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    if VOICE_OUTPUT_AVAILABLE:
+        speak_button.pack(side="left", padx=(8, 0), ipady=3)
+
+    # --- Reminders ---------------------------------------------------------------------
+    def check_reminders():
+        if not busy:  # Don't change tasks while Maja is in the middle of a reply.
+            for task in maja.due_reminders():
+                maja_says(f"⏰ Reminder: {task['text']} (due {describe_due(task['due'])})")
+                in_background(lambda text=task_label(task): notify("Maja ⏰ Reminder", text))
+        root.after(REMINDER_CHECK_MS, check_reminders)
+
+    # --- Start ---------------------------------------------------------------------------
     for past in maja.history:
         if past["role"] == "user":
             append("You", past["content"])
@@ -109,9 +198,24 @@ def main():
     if maja.history:
         append("Maja", "Welcome back, Matty! Type 'new chat' anytime for a fresh start. 💜", "maja")
     else:
-        append("Maja", "Hi Matty! Talk to me about anything, or type 'help' to see what I can do. 💜", "maja")
+        append("Maja", "Hi Matty! Type or press 🎤 to talk to me, or type 'help' to see what I can do. 💜", "maja")
     entry.focus_set()
-    threading.Thread(target=warm_up, daemon=True).start()
+
+    def warm_up():
+        try:
+            brain.warm_up()
+        except BrainError:
+            pass  # The real error message is shown when Matty sends a message.
+        if listener is not None:
+            try:
+                listener.load()
+            except VoiceError:
+                pass  # Shown when Matty presses 🎤.
+
+    in_background(warm_up)
+    root.after(100, run_ui_calls)
+    root.after(1000, check_reminders)
+    root.protocol("WM_DELETE_WINDOW", lambda: (speaker.stop(), root.destroy()))
     root.mainloop()
 
 

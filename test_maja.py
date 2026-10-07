@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from brain import BrainError
 from maja import Maja
+from reminders import guess_due, parse_due
 
 
 class MajaStorageTests(unittest.TestCase):
@@ -111,7 +113,7 @@ class MajaSavingTests(unittest.TestCase):
     def test_notes_and_tasks_from_conversation_are_saved_with_receipts(self):
         with tempfile.TemporaryDirectory() as folder:
             brain = FakeBrain("Great goal!", {"notes": ["Wants to run 5 km"],
-                                              "new_tasks": ["Buy running shoes"]})
+                                              "new_tasks": [{"text": "Buy running shoes", "due": ""}]})
             assistant = Maja(Path(folder) / "data.json", brain)
             answer = assistant.reply("I want to run 5 km, I need shoes")
             self.assertEqual(answer, "Great goal!\n📝 Saved note: Wants to run 5 km\n"
@@ -133,7 +135,7 @@ class MajaSavingTests(unittest.TestCase):
 
     def test_bad_save_suggestions_change_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
-            brain = FakeBrain("Okay.", {"notes": [" ", 5], "new_tasks": [""],
+            brain = FakeBrain("Okay.", {"notes": [" ", 5], "new_tasks": [{"text": "", "due": ""}, "not a task"],
                                         "finished_task_numbers": [7, 0, "1"]})
             assistant = Maja(Path(folder) / "data.json", brain)
             self.assertEqual(assistant.reply("hmm"), "Okay.")
@@ -161,6 +163,71 @@ class MajaSavingTests(unittest.TestCase):
             assistant.reply("My legs hurt after running")
             assistant.reply("yes please")
             self.assertIn("Want me to remind you to stretch?", brain.save_calls[1][1]["content"])
+
+
+class ReminderTests(unittest.TestCase):
+    def test_tasks_with_a_time_get_a_due_date(self):
+        with tempfile.TemporaryDirectory() as folder:
+            due = (datetime.now() + timedelta(days=2)).replace(hour=18, minute=0, second=0, microsecond=0)
+            brain = FakeBrain("Sure!", {"new_tasks": [{"text": "Call mom", "due": f"{due:%Y-%m-%d %H:%M}"}]})
+            assistant = Maja(Path(folder) / "data.json", brain)
+            answer = assistant.reply("Remind me to call mom in two days at 6pm")
+            self.assertIn(f"✅ Added task: Call mom (⏰ {due:%a %d %b}, 18:00)", answer)
+            self.assertEqual(assistant.data["tasks"][0]["due"], f"{due:%Y-%m-%d} 18:00")
+            self.assertIn("○ Call mom (⏰", assistant.reply("show tasks"))
+
+    def test_bad_or_past_due_dates_are_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("Ok.", {"new_tasks": [{"text": "A", "due": "next week"},
+                                                     {"text": "B", "due": "2000-01-01 09:00"}]})
+            assistant = Maja(Path(folder) / "data.json", brain)
+            assistant.reply("stuff")
+            self.assertEqual(assistant.data["tasks"], [{"text": "A", "done": False},
+                                                       {"text": "B", "done": False}])
+
+    def test_due_reminders_fire_once_and_skip_done_tasks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assistant = Maja(Path(folder) / "data.json")
+            now = datetime(2026, 10, 10, 18, 0)
+            assistant.data["tasks"] = [
+                {"text": "Due now", "done": False, "due": "2026-10-10 18:00"},
+                {"text": "Later", "done": False, "due": "2026-10-10 19:00"},
+                {"text": "Already done", "done": True, "due": "2026-10-10 17:00"},
+                {"text": "No time", "done": False},
+            ]
+            self.assertEqual([t["text"] for t in assistant.due_reminders(now)], ["Due now"])
+            self.assertEqual(assistant.due_reminders(now), [])
+            # "Reminded" is saved, so a restart doesn't remind again.
+            self.assertEqual(Maja(Path(folder) / "data.json").due_reminders(now), [])
+
+    def test_parse_due(self):
+        now = datetime(2026, 10, 6, 12, 0)
+        self.assertEqual(parse_due("2026-10-10 18:00", now), datetime(2026, 10, 10, 18, 0))
+        self.assertIsNone(parse_due("2026-10-06 11:00", now))
+        self.assertIsNone(parse_due("", now))
+        self.assertIsNone(parse_due("Saturday", now))
+
+    def test_guess_due_understands_common_phrases(self):
+        now = datetime(2026, 10, 6, 14, 30)  # A Tuesday afternoon.
+        cases = {
+            "remind me in 2 hours to drink water": datetime(2026, 10, 6, 16, 30),
+            "in half an hour": datetime(2026, 10, 6, 15, 0),
+            "remind me at 7am to meditate": datetime(2026, 10, 7, 7, 0),
+            "at 6pm call mom": datetime(2026, 10, 6, 18, 0),
+            "at 18:45": datetime(2026, 10, 6, 18, 45),
+            "tomorrow at 8": datetime(2026, 10, 7, 8, 0),
+            "call grandma tomorrow": datetime(2026, 10, 7, 9, 0),
+            "finish the report by Friday": datetime(2026, 10, 9, 9, 0),
+            "on Tuesday": datetime(2026, 10, 13, 9, 0),
+            "Saturday at 6 in the evening": datetime(2026, 10, 10, 18, 0),
+            "tonight": datetime(2026, 10, 6, 19, 0),
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(guess_due(message, now), expected)
+        for message in ["I need to buy milk", "I study at Chalmers", "at 99"]:
+            with self.subTest(message=message):
+                self.assertIsNone(guess_due(message, now))
 
 
 if __name__ == "__main__":
