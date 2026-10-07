@@ -4,11 +4,19 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from brain import BrainError
+
+
+# How many recent chat messages Maja keeps in mind during a conversation.
+HISTORY_LIMIT = 20
+
 
 class Maja:
-    def __init__(self, data_file: Path):
+    def __init__(self, data_file: Path, brain=None):
         self.data_file = Path(data_file)
         self.data = self._load()
+        self.brain = brain
+        self.history = []
 
     def _load(self):
         if not self.data_file.exists():
@@ -38,7 +46,11 @@ class Maja:
             return "Hi Matty! I'm Maja. What would you like to work on today? 💜"
         if lower in {"help", "commands"}:
             return ("Try: 'remember ...', 'what do you remember?', 'add task ...', "
-                    "'show tasks', 'finish task 1', or 'what time is it?'.")
+                    "'show tasks', 'finish task 1', 'what time is it?', or 'new chat'. "
+                    "Anything else, I'll answer like a normal conversation.")
+        if lower in {"new chat", "reset chat"}:
+            self.history.clear()
+            return "Fresh start! Your notes and tasks are still saved. 💜"
         if lower.startswith("remember "):
             note = message[9:].strip()
             if not note:
@@ -74,5 +86,39 @@ class Maja:
             return f"Done! {task['text']} 🎉"
         if lower in {"what time is it?", "time"}:
             return f"Your computer's local time is {datetime.now():%H:%M}."
-        return ("I can't answer open-ended questions yet. Type 'help' to see what "
-                "this first version can do. We'll add an AI conversation engine next.")
+        if self.brain is None:
+            return ("I can't answer open-ended questions yet. Type 'help' to see what "
+                    "this first version can do. We'll add an AI conversation engine next.")
+        return self._ask_brain(message)
+
+    def _system_prompt(self):
+        notes = "\n".join(f"- {note}" for note in self.data["notes"]) or "(none yet)"
+        tasks = "\n".join(
+            f"- {task['text']}" for task in self.data["tasks"] if not task["done"]
+        ) or "(none)"
+        return (
+            "You are Maja, Matty's warm, encouraging personal assistant. You help with "
+            "English practice, studies, fitness, planning, meditation, finances, travel, "
+            "and personal goals. Keep replies short and friendly (a few sentences) unless "
+            "Matty asks for more. If Matty writes in English, gently point out important "
+            "mistakes when it helps them practice.\n\n"
+            "You cannot save anything yourself. If Matty wants something remembered or added "
+            "as a task, tell them to type 'remember ...' or 'add task ...'. Never claim you "
+            "saved something. For money or health topics, give general guidance, not "
+            "professional advice.\n\n"
+            f"Current local time: {datetime.now():%A %Y-%m-%d %H:%M}\n"
+            f"Things Matty asked you to remember:\n{notes}\n"
+            f"Matty's open tasks:\n{tasks}"
+        )
+
+    def _ask_brain(self, message):
+        user_message = {"role": "user", "content": message}
+        messages = [{"role": "system", "content": self._system_prompt()},
+                    *self.history, user_message]
+        try:
+            answer = self.brain.chat(messages)
+        except BrainError as error:
+            return str(error)
+        self.history += [user_message, {"role": "assistant", "content": answer}]
+        del self.history[:-HISTORY_LIMIT]
+        return answer

@@ -1,9 +1,12 @@
 """Start Maja's first desktop window with: python main.py"""
 
 from pathlib import Path
+import queue
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
+from brain import BrainError, OllamaBrain
 from maja import Maja
 
 
@@ -15,7 +18,8 @@ WHITE = "#f8f1fa"
 
 def main():
     try:
-        maja = Maja(Path(__file__).with_name("maja_data.json"))
+        brain = OllamaBrain()
+        maja = Maja(Path(__file__).with_name("maja_data.json"), brain)
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()
@@ -51,23 +55,55 @@ def main():
         conversation.configure(state="disabled")
         conversation.see("end")
 
-    def send(event=None):
-        message = entry.get().strip()
-        if not message:
+    # The AI model can take a few seconds, so replies are made on a background
+    # thread and handed back to the window through this queue.
+    replies = queue.Queue()
+    busy = False
+
+    def think(message):
+        try:
+            replies.put(maja.reply(message))
+        except OSError as error:
+            replies.put(f"I couldn't save that. Please check the folder permissions: {error}")
+
+    def check_replies():
+        nonlocal busy
+        try:
+            answer = replies.get_nowait()
+        except queue.Empty:
+            root.after(100, check_replies)
             return
+        append("Maja", answer, "maja")
+        busy = False
+        subtitle.configure(text="Your assistant, one step at a time")
+        send_button.configure(state="normal")
+
+    def send(event=None):
+        nonlocal busy
+        message = entry.get().strip()
+        if not message or busy:
+            return
+        busy = True
         entry.delete(0, "end")
         append("You", message)
+        subtitle.configure(text="Maja is thinking…")
+        send_button.configure(state="disabled")
+        threading.Thread(target=think, args=(message,), daemon=True).start()
+        root.after(100, check_replies)
+
+    def warm_up():
         try:
-            append("Maja", maja.reply(message), "maja")
-        except OSError as error:
-            append("Maja", f"I couldn't save that. Please check the folder permissions: {error}", "maja")
+            brain.warm_up()
+        except BrainError:
+            pass  # The real error message is shown when Matty sends a message.
 
     send_button = tk.Button(row, text="Send", command=send, bg=PINK, fg=BG,
                             font=("Segoe UI", 10, "bold"), relief="flat", padx=17)
     send_button.pack(side="left", padx=(8, 0), ipady=8)
     entry.bind("<Return>", send)
-    append("Maja", "Hi Matty! Type 'help' to get started. 💜", "maja")
+    append("Maja", "Hi Matty! Ask me anything, or type 'help' to see my commands. 💜", "maja")
     entry.focus_set()
+    threading.Thread(target=warm_up, daemon=True).start()
     root.mainloop()
 
 
