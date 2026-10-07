@@ -12,8 +12,7 @@ Maja is Matty's personal assistant project. This first version runs on a compute
 4. Open **Terminal → New Terminal**.
 5. Run `python main.py` (or `py main.py` if Windows does not recognize `python`).
 
-No Python packages, account, or API key are needed, and the AI runs entirely on your own computer. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`). Models without tool support, such as `llama3`, still chat but can't save notes or tasks on their own.
-
+No Python packages, account, or API key are needed, and the AI runs entirely on your own computer. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`).
 The app creates `maja_data.json` next to `main.py` to store your notes, tasks, and recent conversation on your own computer. Do not commit that personal file to GitHub.
 
 ## Try these messages
@@ -41,7 +40,7 @@ The tests use a fake AI model, so they don't need Ollama. GitHub runs them autom
 
 ## What this version does
 
-The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks and can save notes, add tasks, and finish tasks while you chat. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. It does **not** hear speech, see through a camera, or control hardware yet.
+The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks. Before each reply, a separate step asks the model for a small structured answer about what to save (new notes, new tasks, finished tasks), so Maja can update your lists while you chat without saving questions or small talk. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. It does **not** hear speech, see through a camera, or control hardware yet.
 
 ## Next milestones
 
