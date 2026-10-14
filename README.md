@@ -1,8 +1,49 @@
-# Maja — desktop prototype
+# Maja — a private, offline AI assistant
 
 [![Tests](https://github.com/Matjat23/maja/actions/workflows/tests.yml/badge.svg)](https://github.com/Matjat23/maja/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Runs offline](https://img.shields.io/badge/AI-runs%20locally-purple)
 
-Maja is Matty's personal assistant project. This first version runs on a computer and keeps a small, local memory of notes and tasks. It is a foundation for a future voice, camera, and physical robot version.
+Maja is a personal AI assistant that runs **entirely on your own computer**: no cloud, no API keys, no data leaving the machine. You can type or talk to her, she remembers what matters from the conversation, keeps your to-do list, and reminds you when things are due.
+
+It's the first step of a bigger project: Maja will get a camera and, eventually, a small physical robot body ("desk buddy").
+
+<!-- Add a screenshot or demo GIF here, e.g. ![Maja demo](docs/demo.gif) -->
+
+## Highlights
+
+- **Local LLM** — conversations run on Llama 3.1 through [Ollama](https://ollama.com), so everything stays private and works offline.
+- **Smart memory** — a two-step design: first the model returns structured JSON (enforced with a schema) describing what to save, then it writes a normal reply. Questions and small talk save nothing; every saved item is shown as a receipt.
+- **Voice in and out** — offline speech recognition with faster-whisper and spoken replies with the built-in Windows voices.
+- **Reminders** — natural-language due times ("Saturday at 6pm", "in 2 hours", "by Friday"), backed by a plain-Python date parser because the model alone got date math wrong.
+- **Tested** — 19 unit tests with a fake model, run on Python 3.11 and 3.13 by GitHub Actions on every push.
+- **No heavy dependencies** — the core uses only the Python standard library (tkinter, urllib); voice packages are optional.
+
+## How it works
+
+```
+ you ──▶ main.py (tkinter window, 🎤/🔊)
+            │
+            ▼
+         maja.py  ── commands ("show tasks", "new chat", …) handled in code
+            │
+            ├─▶ 1. save step:  brain.py ─▶ Ollama (JSON schema, temperature 0)
+            │                   → new notes / tasks / finished tasks
+            ├─▶ 2. reply step: brain.py ─▶ Ollama (knows notes, tasks, last 20 messages)
+            │
+            ├── reminders.py  due-time parsing + Windows notifications
+            ├── voice.py      faster-whisper (speech → text), Windows speech (text → speech)
+            └── maja_data.json  notes, tasks and chat history, stored locally
+```
+
+| File | Role |
+|---|---|
+| `maja.py` | Core assistant: commands, memory, tasks, prompts |
+| `brain.py` | Talks to the local model over Ollama's HTTP API |
+| `voice.py` | Microphone input and spoken replies |
+| `reminders.py` | Due-time parsing and notifications |
+| `main.py` | Desktop window |
+| `test_maja.py` | Unit tests (fake model, no Ollama needed) |
 
 ## Run it on Windows in VS Code
 
