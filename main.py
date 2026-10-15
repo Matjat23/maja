@@ -30,7 +30,6 @@ WHITE = "#f8f1fa"
 RED = "#ff6b81"
 GREY = "#6f6480"
 SUBTITLE = "Your assistant, one step at a time"
-BUTTON_FONT = ("Segoe UI", 10, "bold")
 REMINDER_CHECK_MS = 15_000
 HERE = Path(__file__).parent
 # Demo mode (py main.py --demo) uses a separate folder with its own notes, tasks, chat and
@@ -140,9 +139,9 @@ def main():
         entry.delete(0, "end")
         # With the camera on, the message is about what the camera sees right now.
         photo = photo_for_model(frame) if frame is not None else None
-        append("You (photo)" if photo else "You", message or "What do you see?")
+        append("You 📷" if photo else "You", message or "What do you see?")
         speaker.stop()
-        set_busy(True, "Maja is looking..." if photo else "Maja is thinking...")
+        set_busy(True, "Maja is looking…" if photo else "Maja is thinking…")
 
         def think():
             try:
@@ -159,7 +158,7 @@ def main():
     send_button.pack(side="left", padx=(8, 0), ipady=8)
     entry.bind("<Return>", send)
 
-    # --- Voice: Mic to talk, Voice on/off to hear Maja ------------------------------------------
+    # --- Voice: the mic button to talk, the speaker button to hear Maja ------------------------------------------
     listening = False
 
     def toggle_listening():
@@ -176,13 +175,13 @@ def main():
                 return
             listening = True
             speaker.stop()
-            mic_button.configure(text="Stop", bg=RED)
+            mic_button.configure(text="■", bg=RED)
             send_button.configure(state="disabled")
-            subtitle.configure(text="Listening... click Stop when you're done")
+            subtitle.configure(text="Listening… click ■ when you're done")
             return
         listening = False
-        mic_button.configure(text="Mic", bg=PANEL)
-        set_busy(True, "Turning your voice into text...")
+        mic_button.configure(text="🎤", bg=PANEL)
+        set_busy(True, "Turning your voice into text…")
 
         def transcribe():
             try:
@@ -208,34 +207,34 @@ def main():
     def toggle_speaking():
         speak = not maja.setting("speak", False)
         maja.change_setting("speak", speak)
-        speak_button.configure(text="Voice on" if speak else "Voice off", bg=PINK if speak else PANEL)
+        speak_button.configure(text="🔊" if speak else "🔇", bg=PINK if speak else PANEL)
         if not speak:
             speaker.stop()
 
-    mic_button = tk.Button(row, text="Mic", command=toggle_listening, bg=PANEL, fg=WHITE,
-                           font=BUTTON_FONT, relief="flat", padx=12)
-    mic_button.pack(side="left", padx=(8, 0), ipady=8)
+    mic_button = tk.Button(row, text="🎤", command=toggle_listening, bg=PANEL, fg=WHITE,
+                           font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    mic_button.pack(side="left", padx=(8, 0), ipady=3)
     speaking = maja.setting("speak", False)
-    speak_button = tk.Button(row, text="Voice on" if speaking else "Voice off", command=toggle_speaking,
+    speak_button = tk.Button(row, text="🔊" if speaking else "🔇", command=toggle_speaking,
                              bg=PINK if speaking else PANEL, fg=WHITE,
-                             font=BUTTON_FONT, relief="flat", padx=12)
+                             font=("Segoe UI Emoji", 12), relief="flat", padx=10)
     if VOICE_OUTPUT_AVAILABLE:
-        speak_button.pack(side="left", padx=(8, 0), ipady=8)
+        speak_button.pack(side="left", padx=(8, 0), ipady=3)
 
-    # --- Documents: Docs opens the folder; new files are read when Maja starts ---------------
+    # --- Documents: the folder button opens the folder; new files are read when Maja starts ---------------
     def open_documents():
         DOCUMENTS.mkdir(exist_ok=True)
         os.startfile(DOCUMENTS)
         maja_says("Put PDFs, .txt or .md files in this folder, then type 'update documents' "
-                  "and ask me about them.")
+                  "and ask me about them. 📚")
 
     if os.name == "nt":
-        tk.Button(row, text="Docs", command=open_documents, bg=PANEL, fg=WHITE,
-                  font=BUTTON_FONT, relief="flat", padx=12).pack(side="left", padx=(8, 0), ipady=8)
+        tk.Button(row, text="📂", command=open_documents, bg=PANEL, fg=WHITE,
+                  font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
 
-    # --- Camera: the Camera button turns it on with a live preview; sending then includes a photo ---------
+    # --- Camera: the camera button turns it on with a live preview; sending then includes a photo ---------
     camera_frame = tk.Frame(root, bg=BG)
-    camera_label = tk.Label(camera_frame, text="Camera on: your next message includes a photo",
+    camera_label = tk.Label(camera_frame, text="● Camera on — your next message includes a photo",
                             font=("Segoe UI", 9, "bold"), bg=BG, fg=RED)
     camera_label.pack(anchor="w")
     camera_preview = tk.Label(camera_frame, bg=BG)
@@ -270,7 +269,7 @@ def main():
             return
         camera_frame.pack(side="bottom", before=conversation, anchor="w", padx=20, pady=(0, 10))
         camera_button.configure(bg=RED)
-        subtitle.configure(text="Camera on. Ask me something, like 'what am I holding?'")
+        subtitle.configure(text="Camera on 📷 Ask me something, like 'what am I holding?'")
         update_preview()
 
         def load_vision_model():
@@ -283,19 +282,19 @@ def main():
 
         in_background(load_vision_model)
 
-    camera_button = tk.Button(row, text="Camera", command=toggle_camera, bg=PANEL, fg=WHITE,
-                              font=BUTTON_FONT, relief="flat", padx=12)
-    camera_button.pack(side="left", padx=(8, 0), ipady=8)
+    camera_button = tk.Button(row, text="📷", command=toggle_camera, bg=PANEL, fg=WHITE,
+                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    camera_button.pack(side="left", padx=(8, 0), ipady=3)
 
-    # --- Phone: the Phone button turns on a small web server and shows a QR code to scan ------------------
+    # --- Phone: the phone button turns on a small web server and shows a QR code to scan ------------------
     phone = None
 
     def show_phone_message(message, reply):
-        ui_calls.put(lambda: (append("You (phone)", message), append("Maja", reply, "maja")))
+        ui_calls.put(lambda: (append("You (📱)", message), append("Maja", reply, "maja")))
 
     def show_qr(link):
         window = tk.Toplevel(root, bg=BG)
-        window.title("Maja on your phone")
+        window.title("Maja on your phone 📱")
         tk.Label(window, text="Scan with your phone's camera", font=("Segoe UI", 13, "bold"),
                  bg=BG, fg=PINK).pack(padx=20, pady=(16, 8))
         code = qrcode.QRCode(border=2)
@@ -325,7 +324,7 @@ def main():
             phone.stop()
             phone = None
             phone_button.configure(bg=PANEL)
-            maja_says("Phone access is off.")
+            maja_says("Phone access is off. 📱")
             return
         key = maja.setting("phone_key")
         if not key:
@@ -339,13 +338,13 @@ def main():
             maja_says(f"I couldn't start phone access: {error}")
             return
         phone_button.configure(bg=PINK)
-        maja_says("Phone access is on. Scan the QR code with your phone (same Wi-Fi). "
-                  "Click Phone again to turn it off.")
+        maja_says("Phone access is on! 📱 Scan the QR code with your phone (same Wi-Fi). "
+                  "Click 📱 again to turn it off.")
         show_qr(phone.link())
 
-    phone_button = tk.Button(row, text="Phone", command=toggle_phone, bg=PANEL, fg=WHITE,
-                             font=BUTTON_FONT, relief="flat", padx=12)
-    phone_button.pack(side="left", padx=(8, 0), ipady=8)
+    phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
+                             font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    phone_button.pack(side="left", padx=(8, 0), ipady=3)
 
     # --- Reminders ---------------------------------------------------------------------
     def check_reminders():
@@ -356,8 +355,8 @@ def main():
             finally:
                 maja_lock.release()
             for task in due:
-                maja_says(f"Reminder: {task['text']} (due {describe_due(task['due'])})")
-                in_background(lambda text=task_label(task): notify("Maja reminder", text))
+                maja_says(f"⏰ Reminder: {task['text']} (due {describe_due(task['due'])})")
+                in_background(lambda text=task_label(task): notify("Maja ⏰ Reminder", text))
         root.after(REMINDER_CHECK_MS, check_reminders)
 
     # --- Start ---------------------------------------------------------------------------
@@ -369,7 +368,7 @@ def main():
     if maja.history:
         append("Maja", "Welcome back, Matty! Type 'new chat' anytime for a fresh start. 💜", "maja")
     else:
-        append("Maja", "Hi Matty! Type, or press Mic to talk to me. Type 'help' to see what I can do. 💜", "maja")
+        append("Maja", "Hi Matty! Type or press 🎤 to talk to me, or type 'help' to see what I can do. 💜", "maja")
     entry.focus_set()
 
     def warm_up():
@@ -381,7 +380,7 @@ def main():
             try:
                 listener.load()
             except VoiceError:
-                pass  # Shown when Matty presses Mic.
+                pass  # Shown when Matty presses the mic button.
 
     def read_documents():
         # Runs alongside warm_up(), so documents are ready without waiting for the models.

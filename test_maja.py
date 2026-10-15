@@ -142,8 +142,8 @@ class MajaSavingTests(unittest.TestCase):
                                               "new_tasks": [{"text": "Buy running shoes", "due": ""}]})
             assistant = Maja(Path(folder) / "data.json", brain)
             answer = assistant.reply("I want to run 5 km, I need shoes")
-            self.assertEqual(answer, "Great goal!\nSaved note: Wants to run 5 km\n"
-                                     "Added task: Buy running shoes")
+            self.assertEqual(answer, "Great goal!\n📝 Saved note: Wants to run 5 km\n"
+                                     "✅ Added task: Buy running shoes")
             self.assertIn("Wants to run 5 km", assistant.reply("show notes"))
             self.assertIn("○ Buy running shoes", assistant.reply("show tasks"))
             # The reply step is told what was saved, so it doesn't contradict it.
@@ -154,7 +154,7 @@ class MajaSavingTests(unittest.TestCase):
             assistant = Maja(Path(folder) / "data.json",
                              FakeBrain("Well done!", {"finished_task_numbers": [1]}))
             assistant.reply("add task Call mom")
-            self.assertIn("Finished task: Call mom", assistant.reply("I called mom"))
+            self.assertIn("🎉 Finished task: Call mom", assistant.reply("I called mom"))
             self.assertIn("✓ Call mom", assistant.reply("show tasks"))
             # A task that is already done isn't "finished" again.
             self.assertEqual(assistant.reply("I called mom again"), "Well done!")
@@ -198,9 +198,9 @@ class ReminderTests(unittest.TestCase):
             brain = FakeBrain("Sure!", {"new_tasks": [{"text": "Call mom", "due": f"{due:%Y-%m-%d %H:%M}"}]})
             assistant = Maja(Path(folder) / "data.json", brain)
             answer = assistant.reply("Remind me to call mom in two days at 6pm")
-            self.assertIn(f"Added task: Call mom (due {due:%a %d %b}, 18:00)", answer)
+            self.assertIn(f"✅ Added task: Call mom (⏰ {due:%a %d %b}, 18:00)", answer)
             self.assertEqual(assistant.data["tasks"][0]["due"], f"{due:%Y-%m-%d} 18:00")
-            self.assertIn("○ Call mom (due", assistant.reply("show tasks"))
+            self.assertIn("○ Call mom (⏰", assistant.reply("show tasks"))
 
     def test_bad_or_past_due_dates_are_ignored(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -324,9 +324,9 @@ class PhotoTests(unittest.TestCase):
             brain = FakeBrain("You're holding a red mug.")
             assistant = Maja(Path(folder) / "data.json", brain)
             answer = assistant.reply_about_photo("What am I holding?", "BASE64PHOTO")
-            self.assertEqual(answer, "You're holding a red mug.\n(Looked at one photo, not saved.)")
+            self.assertEqual(answer, "You're holding a red mug.\n📷 Looked at one photo (not saved)")
             self.assertEqual(brain.calls[0][-1], {"photo": "BASE64PHOTO"})
-            self.assertEqual(assistant.history[0]["content"], "(with a photo) What am I holding?")
+            self.assertEqual(assistant.history[0]["content"], "(with a photo 📷) What am I holding?")
             self.assertNotIn("BASE64PHOTO", (Path(folder) / "data.json").read_text(encoding="utf-8"))
 
     def test_empty_message_asks_what_maja_sees(self):
@@ -386,10 +386,10 @@ class MajaDocumentTests(unittest.TestCase):
             ])
             assistant = Maja(Path(folder) / "data.json", brain, library)
             answer = assistant.reply("How does MPI work?")
-            self.assertTrue(answer.endswith("Sources: hpc.pdf p. 3, notes.md"))
+            self.assertTrue(answer.endswith("📚 Sources: hpc.pdf p. 3, notes.md"))
             self.assertIn("MPI sends messages between processes.", brain.calls[0][0]["content"])
             # Sources aren't stored in the chat history, only the answer.
-            self.assertNotIn("Sources:", assistant.history[-1]["content"])
+            self.assertNotIn("📚", assistant.history[-1]["content"])
 
     def test_weak_matches_are_only_shown_when_the_answer_uses_them(self):
         weak = {"source": "spanish.md", "page": None, "text": "Buenos días.", "distance": 0.43}
@@ -397,7 +397,7 @@ class MajaDocumentTests(unittest.TestCase):
             unused = Maja(Path(folder) / "a.json", FakeBrain("Try oatmeal."), FakeLibrary([weak]))
             self.assertEqual(unused.reply("Good breakfast?"), "Try oatmeal.")
             cited = Maja(Path(folder) / "b.json", FakeBrain("Buenos días [spanish.md]."), FakeLibrary([weak]))
-            self.assertIn("Sources: spanish.md", cited.reply("Good morning in Spanish?"))
+            self.assertIn("📚 Sources: spanish.md", cited.reply("Good morning in Spanish?"))
 
     def test_no_sources_line_without_matching_documents(self):
         with tempfile.TemporaryDirectory() as folder:

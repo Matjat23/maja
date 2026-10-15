@@ -3,7 +3,7 @@
 When phone access is on, Maja serves a chat page at http://<this computer>:8765. The
 phone opens it once through a link (or QR code) that contains a secret key; the page
 remembers the key and sends it with every request, so nobody else on the network can
-read or change your notes. Phone access is off until Matty turns it on with the Phone button.
+read or change your notes. Phone access is off until Matty turns it on with the phone button.
 
 The connection is plain HTTP, so only use it on a network you trust (like home Wi-Fi).
 """
@@ -119,7 +119,7 @@ PHONE_PAGE = """<!doctype html>
 </style></head>
 <body>
 <header>Maja ✨</header>
-<div id="status">Connecting...</div>
+<div id="status">Connecting…</div>
 <div id="chat"></div>
 <form id="form"><input id="text" autocomplete="off" placeholder="Message Maja">
 <button id="send">Send</button></form>
@@ -143,7 +143,7 @@ PHONE_PAGE = """<!doctype html>
   async function call(path, options = {}) {
     const response = await fetch(path, { ...options,
       headers: { "Content-Type": "application/json", "X-Maja-Key": key || "" } });
-    if (response.status === 401) throw new Error("This phone isn't connected. Scan the QR code in Maja again (Phone button).");
+    if (response.status === 401) throw new Error("This phone isn't connected. Scan the QR code in Maja (📱) again.");
     if (!response.ok) throw new Error("Maja had a problem (" + response.status + ").");
     return response.json();
   }
@@ -159,7 +159,7 @@ PHONE_PAGE = """<!doctype html>
     const message = text.value.trim();
     if (!message) return;
     text.value = ""; add("you", message);
-    send.disabled = true; status.textContent = "Maja is thinking...";
+    send.disabled = true; status.textContent = "Maja is thinking…";
     try {
       const data = await call("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
       add("maja", data.reply);
