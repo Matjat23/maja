@@ -305,6 +305,19 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(self.maja.data["tasks"][0]["text"], "Water the plants")
 
 
+class AbilityTests(unittest.TestCase):
+    def test_maja_is_told_what_she_can_do_and_whether_she_is_speaking(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain()
+            assistant = Maja(Path(folder) / "data.json", brain)
+            assistant.reply("Can you talk?")
+            self.assertIn("Spoken replies are OFF", brain.calls[-1][0]["content"])
+            assistant.change_setting("speak", True)
+            assistant.reply("Can you talk now?")
+            self.assertIn("Spoken replies are ON", brain.calls[-1][0]["content"])
+            self.assertIn("webcam", brain.calls[-1][0]["content"])
+
+
 class PhotoTests(unittest.TestCase):
     def test_photo_questions_go_to_the_vision_model_and_the_photo_is_not_stored(self):
         with tempfile.TemporaryDirectory() as folder:

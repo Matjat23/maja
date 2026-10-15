@@ -297,6 +297,23 @@ class Maja:
                 receipts.append(f"🎉 Finished task: {task['text']}")
         return receipts
 
+    def _abilities(self):
+        """What Maja can do, so she answers questions about herself correctly
+        instead of guessing that she's 'just a text-based AI'."""
+        speaking = ("Spoken replies are ON right now, so Matty hears your answers out loud"
+                    if self.setting("speak", False) else
+                    "Spoken replies are OFF right now; Matty can turn them on with the 🔊 button")
+        seeing = ("The camera is OFF right now, so you can't see anything at the moment; Matty "
+                  "can turn it on with 📷 and then send a message about what it shows")
+        return (
+            "What you (Maja) can do in this app: Matty can talk to you with the 🎤 button "
+            "(speech is turned into text on this computer). You can speak your replies out "
+            f"loud with a Windows voice. {speaking}. You can look through the webcam, but "
+            f"only when Matty turns it on with 📷. {seeing}. You can answer questions from Matty's own documents "
+            "(📂). Matty can chat with you from their phone (📱). You run entirely on "
+            "Matty's own computer. Never say you are only text-based or can't speak."
+        )
+
     def _search_documents(self, message):
         if self.library is None:
             return []
@@ -332,6 +349,7 @@ class Maja:
             "Maja's app keeps a list of notes and tasks. Tasks with a ⏰ time get a "
             "notification at that time, but only while the Maja app is open. Tasks without "
             "a time get no reminder.\n\n"
+            f"{self._abilities()}\n\n"
             f"Current local time: {datetime.now():%A %Y-%m-%d %H:%M}\n"
             f"{saved_before}\n\n"
             "Just saved for the first time from Matty's latest message (Matty already "
