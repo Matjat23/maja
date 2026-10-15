@@ -1,9 +1,13 @@
+import math
+import re
 import tempfile
 import unittest
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from brain import BrainError
+from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from maja import Maja
 from reminders import guess_due, parse_due
 
@@ -50,6 +54,18 @@ class FakeBrain:
         if self.error or self.save_error:
             raise self.error or self.save_error
         return {"notes": [], "new_tasks": [], "finished_task_numbers": [], **self.saves}
+
+    def embed(self, texts):
+        """A simple stand-in for an embedding model: texts sharing words get similar vectors."""
+        vectors = []
+        for text in texts:
+            vector = [0.0] * 64
+            for word in re.findall(r"[a-z]+", text.lower().split(":", 1)[-1]):
+                if len(word) > 3:
+                    vector[zlib.crc32(word.encode()) % 64] += 1.0
+            length = math.sqrt(sum(x * x for x in vector)) or 1.0
+            vectors.append([x / length for x in vector] if any(vector) else [1.0] + [0.0] * 63)
+        return vectors
 
 class MajaConversationTests(unittest.TestCase):
     def test_open_questions_go_to_the_brain_with_notes_and_history(self):
@@ -228,6 +244,114 @@ class ReminderTests(unittest.TestCase):
         for message in ["I need to buy milk", "I study at Chalmers", "at 99"]:
             with self.subTest(message=message):
                 self.assertIsNone(guess_due(message, now))
+
+
+class ChunkingTests(unittest.TestCase):
+    def test_short_paragraphs_are_kept_together(self):
+        self.assertEqual(split_into_chunks("First idea.\n\nSecond   idea.\n\n\n"), ["First idea. Second idea."])
+
+    def test_long_text_is_split_with_overlap(self):
+        words = " ".join(f"word{i}" for i in range(600))
+        chunks = split_into_chunks(words)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= CHUNK_CHARS for chunk in chunks))
+        # The end of one chunk is repeated at the start of the next, so no idea is cut in half.
+        self.assertIn(chunks[0].split()[-1], chunks[1])
+        self.assertIn("word599", chunks[-1])
+
+
+class FakeLibrary:
+    folder = Path("documents")
+
+    def __init__(self, hits=()):
+        self.hits = list(hits)
+
+    def search(self, question):
+        return self.hits
+
+    def documents(self):
+        return [hit["source"] for hit in self.hits]
+
+
+class MajaDocumentTests(unittest.TestCase):
+    def test_answers_use_document_excerpts_and_show_sources(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("MPI passes messages between processes [hpc.pdf p. 3].")
+            library = FakeLibrary([
+                {"source": "hpc.pdf", "page": 3, "text": "MPI sends messages between processes.", "distance": 0.2},
+                {"source": "hpc.pdf", "page": 3, "text": "More on MPI.", "distance": 0.3},
+                {"source": "notes.md", "page": None, "text": "Lab notes about MPI.", "distance": 0.4},
+            ])
+            assistant = Maja(Path(folder) / "data.json", brain, library)
+            answer = assistant.reply("How does MPI work?")
+            self.assertTrue(answer.endswith("📚 Sources: hpc.pdf p. 3, notes.md"))
+            self.assertIn("MPI sends messages between processes.", brain.calls[0][0]["content"])
+            # Sources aren't stored in the chat history, only the answer.
+            self.assertNotIn("📚", assistant.history[-1]["content"])
+
+    def test_weak_matches_are_only_shown_when_the_answer_uses_them(self):
+        weak = {"source": "spanish.md", "page": None, "text": "Buenos días.", "distance": 0.43}
+        with tempfile.TemporaryDirectory() as folder:
+            unused = Maja(Path(folder) / "a.json", FakeBrain("Try oatmeal."), FakeLibrary([weak]))
+            self.assertEqual(unused.reply("Good breakfast?"), "Try oatmeal.")
+            cited = Maja(Path(folder) / "b.json", FakeBrain("Buenos días [spanish.md]."), FakeLibrary([weak]))
+            self.assertIn("📚 Sources: spanish.md", cited.reply("Good morning in Spanish?"))
+
+    def test_no_sources_line_without_matching_documents(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assistant = Maja(Path(folder) / "data.json", FakeBrain("Hi!"), FakeLibrary())
+            self.assertEqual(assistant.reply("How are you?"), "Hi!")
+
+    def test_document_commands_explain_setup_when_unavailable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assistant = Maja(Path(folder) / "data.json", FakeBrain())
+            self.assertIn("pip install", assistant.reply("show documents"))
+
+
+@unittest.skipUnless(LIBRARY_AVAILABLE, "needs chromadb and pypdf (requirements.txt)")
+class LibraryTests(unittest.TestCase):
+    def setUp(self):
+        # Chroma keeps its files open on Windows, so the folder can't always be removed.
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.root = Path(self.temporary.name)
+        self.docs = self.root / "documents"
+        self.docs.mkdir()
+        (self.docs / "hpc.txt").write_text(
+            "MPI processes exchange messages across distributed memory nodes.", encoding="utf-8")
+        (self.docs / "home.md").write_text("The rent payment is due monthly.", encoding="utf-8")
+        (self.docs / "photo.jpg").write_bytes(b"not a document")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def library(self):
+        return Library(self.docs, self.root / "database", FakeBrain())
+
+    def test_reads_finds_and_forgets_documents(self):
+        library = self.library()
+        self.assertEqual(sorted(library.update()["added"]), ["home.md", "hpc.txt"])
+        self.assertEqual(library.documents(), ["home.md", "hpc.txt"])
+
+        hits = library.search("How do MPI processes exchange messages?")
+        self.assertEqual(hits[0]["source"], "hpc.txt")
+        self.assertNotIn("home.md", [hit["source"] for hit in hits])
+        self.assertEqual(library.search("favourite pizza topping"), [])
+
+        # Unchanged files aren't read again, even after a restart.
+        self.assertEqual(self.library().update(), {"added": [], "updated": [], "removed": [], "problems": []})
+
+        (self.docs / "home.md").write_text("The rent payment is due on the first weekday.", encoding="utf-8")
+        (self.docs / "hpc.txt").unlink()
+        report = library.update()
+        self.assertEqual((report["updated"], report["removed"]), (["home.md"], ["hpc.txt"]))
+        self.assertEqual(library.search("MPI processes exchange messages"), [])
+
+    def test_broken_pdfs_are_reported_not_fatal(self):
+        (self.docs / "broken.pdf").write_bytes(b"%PDF-1.4 this is not really a pdf")
+        report = self.library().update()
+        self.assertEqual(len(report["problems"]), 1)
+        self.assertIn("broken.pdf", report["problems"][0])
+        self.assertEqual(sorted(report["added"]), ["home.md", "hpc.txt"])
 
 
 if __name__ == "__main__":

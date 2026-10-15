@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from brain import BrainError
+from library import CLEAR_MATCH, LibraryError, source_label
 from reminders import DUE_FORMAT, describe_due, guess_due, parse_due
 
 
@@ -72,11 +73,22 @@ def task_label(task):
     return task["text"]
 
 
+def describe_update(report):
+    """A short, friendly summary of Library.update()."""
+    lines = [f"📄 Read: {name}" for name in report["added"]]
+    lines += [f"🔄 Re-read (changed): {name}" for name in report["updated"]]
+    lines += [f"🗑️ Forgot (deleted): {name}" for name in report["removed"]]
+    lines += [f"⚠️ {problem}" for problem in report["problems"]]
+    return "\n".join(lines) or "My documents are up to date. 📚"
+
+
 class Maja:
-    def __init__(self, data_file: Path, brain=None):
+    def __init__(self, data_file: Path, brain=None, library=None):
         self.data_file = Path(data_file)
         self.data = self._load()
         self.brain = brain
+        # Matty's documents (see library.py). None when that feature isn't installed.
+        self.library = library
         # The conversation is stored with the notes, so it survives a restart.
         self.history = self.data["history"]
 
@@ -157,7 +169,9 @@ class Maja:
             return ("Just talk to me normally, for example 'remind me to call mom' or "
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
-                    "'show tasks', 'finish task 1', 'what time is it?', or 'new chat'.")
+                    "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
+                    "'show documents', or 'update documents'. Put PDFs and notes in my "
+                    "documents folder and ask me about them.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
             self._save()
@@ -190,6 +204,19 @@ class Maja:
             if task is None:
                 return "Use a task number from 'show tasks', for example 'finish task 1'."
             return f"Done! {task['text']} 🎉"
+        if lower in {"show documents", "my documents", "update documents", "read my documents"}:
+            if self.library is None:
+                return ("I can't read documents yet. In a terminal, run: "
+                        "py -m pip install -r requirements.txt  — then restart me.")
+            if lower in {"show documents", "my documents"}:
+                files = self.library.documents()
+                if not files:
+                    return f"I haven't read any documents yet. Put PDFs, .txt or .md files in {self.library.folder}"
+                return "Documents I've read:\n" + "\n".join(f"📄 {name}" for name in files)
+            try:
+                return describe_update(self.library.update())
+            except (BrainError, LibraryError) as error:
+                return str(error)
         if lower in {"what time is it?", "time"}:
             return f"Your computer's local time is {datetime.now():%H:%M}."
         if self.brain is None:
@@ -237,9 +264,28 @@ class Maja:
                 receipts.append(f"🎉 Finished task: {task['text']}")
         return receipts
 
-    def _system_prompt(self, saved_before, receipts):
+    def _search_documents(self, message):
+        if self.library is None:
+            return []
+        try:
+            return self.library.search(message)
+        except (BrainError, LibraryError):
+            return []  # Maja still answers, just without the documents.
+
+    def _system_prompt(self, saved_before, receipts, excerpts):
         # Without the emoji: the model can read "✅" as "completed".
         just_saved = "\n".join("- " + receipt.split(" ", 1)[1] for receipt in receipts) or "(nothing)"
+        documents = ""
+        if excerpts:
+            documents = (
+                "\n\nExcerpts from Matty's own documents that may help with the latest "
+                "message, most relevant first. If they answer it, base your answer on them "
+                "and name the source in square brackets, like [notes.pdf p. 3]. If they "
+                "don't contain the answer, say so and make clear that the rest of your "
+                "answer is general knowledge, not from the documents.\n\n"
+                + "\n\n".join(f"[{source_label(hit['source'], hit['page'])}]\n{hit['text']}"
+                              for hit in excerpts)
+            )
         return (
             "You are Maja, Matty's warm, encouraging personal assistant. You help with "
             "English practice, studies, fitness, planning, meditation, finances, travel, "
@@ -257,6 +303,7 @@ class Maja:
             f"{saved_before}\n\n"
             "Just saved for the first time from Matty's latest message (Matty already "
             f"sees this, so don't repeat it, and it is new, not something said before):\n{just_saved}"
+            f"{documents}"
         )
 
     def _ask_brain(self, message):
@@ -267,14 +314,20 @@ class Maja:
             # Nothing is saved this time. If Ollama itself is down, the reply below
             # fails too and shows Matty what to do.
             receipts = []
+        excerpts = self._search_documents(message)
         user_message = {"role": "user", "content": message}
         try:
             answer = self.brain.chat([
-                {"role": "system", "content": self._system_prompt(saved_before, receipts)},
+                {"role": "system", "content": self._system_prompt(saved_before, receipts, excerpts)},
                 *self.history, user_message,
             ])
         except BrainError as error:
             return "\n".join([str(error), *receipts])
+        used = [hit for hit in excerpts
+                if hit["distance"] <= CLEAR_MATCH or source_label(hit["source"], hit["page"]) in answer]
+        if used:
+            sources = dict.fromkeys(source_label(hit["source"], hit["page"]) for hit in used)
+            receipts.append("📚 Sources: " + ", ".join(sources))
         text = "\n".join([answer, *receipts])
         self.history += [user_message, {"role": "assistant", "content": answer}]
         del self.history[:-HISTORY_LIMIT]

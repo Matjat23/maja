@@ -1,13 +1,15 @@
 """Start Maja's desktop window with: python main.py"""
 
 from pathlib import Path
+import os
 import queue
 import threading
 import tkinter as tk
 from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
-from maja import Maja, task_label
+from library import Library, LibraryError
+from maja import Maja, describe_update, task_label
 from reminders import describe_due, notify
 from voice import VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE, Listener, Speaker, VoiceError
 
@@ -20,12 +22,18 @@ RED = "#ff6b81"
 GREY = "#6f6480"
 SUBTITLE = "Your assistant, one step at a time"
 REMINDER_CHECK_MS = 15_000
+HERE = Path(__file__).parent
+DOCUMENTS = HERE / "documents"
 
 
 def main():
     try:
         brain = OllamaBrain()
-        maja = Maja(Path(__file__).with_name("maja_data.json"), brain)
+        try:
+            library = Library(DOCUMENTS, HERE / "library_db", brain)
+        except LibraryError:
+            library = None  # Maja explains how to install it when Matty asks about documents.
+        maja = Maja(HERE / "maja_data.json", brain, library)
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()
@@ -181,6 +189,17 @@ def main():
     if VOICE_OUTPUT_AVAILABLE:
         speak_button.pack(side="left", padx=(8, 0), ipady=3)
 
+    # --- Documents: 📂 opens the folder; new files are read when Maja starts ---------------
+    def open_documents():
+        DOCUMENTS.mkdir(exist_ok=True)
+        os.startfile(DOCUMENTS)
+        maja_says("Put PDFs, .txt or .md files in this folder, then type 'update documents' "
+                  "and ask me about them. 📚")
+
+    if os.name == "nt":
+        tk.Button(row, text="📂", command=open_documents, bg=PANEL, fg=WHITE,
+                  font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
+
     # --- Reminders ---------------------------------------------------------------------
     def check_reminders():
         if not busy:  # Don't change tasks while Maja is in the middle of a reply.
@@ -211,6 +230,14 @@ def main():
                 listener.load()
             except VoiceError:
                 pass  # Shown when Matty presses 🎤.
+        if library is not None:
+            try:
+                report = library.update()
+            except (BrainError, LibraryError):
+                return  # Shown when Matty types 'update documents'.
+            if any(report.values()):
+                summary = describe_update(report)
+                ui_calls.put(lambda: maja_says("I looked through your documents folder:\n" + summary))
 
     in_background(warm_up)
     root.after(100, run_ui_calls)

@@ -2,3 +2,7 @@ maja_data.json
 __pycache__/
 *.pyc
 .venv/
+
+# Matty's private documents and their search database
+documents/
+library_db/

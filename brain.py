@@ -17,7 +17,11 @@ class BrainError(Exception):
 class OllamaBrain:
     def __init__(self, model=None, host=None, timeout=300):
         self.model = model or os.getenv("MAJA_MODEL", "llama3.1")
-        self.host = (host or os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+        # Turns text into numbers (embeddings) so Maja can search Matty's documents.
+        self.embed_model = os.getenv("MAJA_EMBED_MODEL", "nomic-embed-text")
+        # 127.0.0.1, not "localhost": on Windows, "localhost" first tries IPv6 and
+        # wastes about 2 seconds on every request.
+        self.host = (host or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         if not self.host.startswith("http"):
             self.host = "http://" + self.host
         # The first reply can take a minute while the model loads into memory.
@@ -34,9 +38,10 @@ class OllamaBrain:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             if error.code == 404:
+                model = payload.get("model", self.model)
                 raise BrainError(
-                    f"The model '{self.model}' isn't downloaded yet. "
-                    f"Run 'ollama pull {self.model}' in a terminal, then try again."
+                    f"The model '{model}' isn't downloaded yet. "
+                    f"Run 'ollama pull {model}' in a terminal, then try again."
                 ) from error
             raise BrainError(f"Ollama returned an error ({error.code}).") from error
         except (urllib.error.URLError, ConnectionError) as error:
@@ -67,6 +72,11 @@ class OllamaBrain:
         if not reply:
             raise BrainError("The model sent an empty reply. Please try again.")
         return reply
+
+    def embed(self, texts):
+        """Turn each text into a list of numbers; similar meanings get similar numbers."""
+        data = self._post("/api/embed", {"model": self.embed_model, "input": texts, "keep_alive": "30m"})
+        return data["embeddings"]
 
     def extract(self, messages, schema):
         """Ask for an answer shaped like the JSON `schema` and return it as a dict."""
