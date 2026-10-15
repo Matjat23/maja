@@ -4,9 +4,11 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![Runs offline](https://img.shields.io/badge/AI-runs%20locally-purple)
 
-Maja is a personal AI assistant that runs **entirely on your own computer**: no cloud, no API keys, no data leaving the machine. You can type or talk to her, she remembers what matters from the conversation, keeps your to-do list, and reminds you when things are due.
+> 🚧 **Status: in active development.** Working now: conversations, memory, voice, reminders, answers from your own documents (RAG), camera, and phone access. Next: the physical robot version.
 
-It's the first step of a bigger project: Maja will get a camera and, eventually, a small physical robot body ("desk buddy").
+Maja is a personal AI assistant that runs **entirely on your own computer**: no cloud, no API keys, no data leaving the machine. You can type or talk to her, she remembers what matters from the conversation, keeps your to-do list, reminds you when things are due, answers questions from your own notes and PDFs, and can look through the webcam when you turn it on.
+
+It's the first step of a bigger project: eventually Maja gets a small physical robot body ("desk buddy").
 
 <!-- Add a screenshot or demo GIF here, e.g. ![Maja demo](docs/demo.gif) -->
 
@@ -15,24 +17,30 @@ It's the first step of a bigger project: Maja will get a camera and, eventually,
 - **Local LLM** — conversations run on Llama 3.1 through [Ollama](https://ollama.com), so everything stays private and works offline.
 - **Smart memory** — a two-step design: first the model returns structured JSON (enforced with a schema) describing what to save, then it writes a normal reply. Questions and small talk save nothing; every saved item is shown as a receipt.
 - **Voice in and out** — offline speech recognition with faster-whisper and spoken replies with the built-in Windows voices.
-- **Reminders** — natural-language due times ("Saturday at 6pm", "in 2 hours", "by Friday"), backed by a plain-Python date parser because the model alone got date math wrong.
-- **Tested** — 19 unit tests with a fake model, run on Python 3.11 and 3.13 by GitHub Actions on every push.
-- **No heavy dependencies** — the core uses only the Python standard library (tkinter, urllib); voice packages are optional.
+- **Reminders** — natural-language due times ("Saturday at 6pm", "in 2 hours", "by Friday"), backed by a plain-Python date parser because the model alone got date math wrong. Maja can start with Windows so reminders work all day.
+- **RAG over your own documents** — PDFs and notes are chunked, embedded locally (nomic-embed-text) and stored in ChromaDB; answers cite their sources, with distance cut-offs measured on real questions vs. ordinary chat.
+- **Vision** — a webcam with a visible on/off control; photos go to a local vision model (Qwen2.5-VL) and are never saved.
+- **Phone access** — a small FastAPI server with a QR code and a secret key lets you chat with the same Maja from your phone on home Wi-Fi.
+- **Tested** — 35 unit tests with fake models, run on Python 3.11 and 3.13 by GitHub Actions on every push.
+- **Light core** — the core uses only the Python standard library (tkinter, urllib); voice, documents, phone and camera packages are optional.
 
 ## How it works
 
 ```
- you ──▶ main.py (tkinter window, 🎤/🔊)
-            │
-            ▼
+ you ──▶ main.py (tkinter window, 🎤 🔊 📂 📷 📱)      phone ──▶ server.py (FastAPI)
+            │                                                    │
+            ▼                                                    ▼
          maja.py  ── commands ("show tasks", "new chat", …) handled in code
             │
             ├─▶ 1. save step:  brain.py ─▶ Ollama (JSON schema, temperature 0)
             │                   → new notes / tasks / finished tasks
-            ├─▶ 2. reply step: brain.py ─▶ Ollama (knows notes, tasks, last 20 messages)
+            ├─▶ 2. retrieve:   library.py ─▶ embeddings ─▶ ChromaDB (your documents)
+            ├─▶ 3. reply step: brain.py ─▶ Ollama (notes, tasks, last 20 messages, excerpts)
             │
+            ├── camera.py     webcam ─▶ local vision model (only when 📷 is on)
             ├── reminders.py  due-time parsing + Windows notifications
             ├── voice.py      faster-whisper (speech → text), Windows speech (text → speech)
+            ├── autostart.py  optional start with Windows
             └── maja_data.json  notes, tasks and chat history, stored locally
 ```
 
@@ -42,8 +50,12 @@ It's the first step of a bigger project: Maja will get a camera and, eventually,
 | `brain.py` | Talks to the local model over Ollama's HTTP API |
 | `voice.py` | Microphone input and spoken replies |
 | `reminders.py` | Due-time parsing and notifications |
+| `library.py` | Document search (RAG): extract, chunk, embed, store, retrieve |
+| `camera.py` | Webcam capture for the vision model |
+| `server.py` | Phone access (FastAPI) |
+| `autostart.py` | Start with Windows |
 | `main.py` | Desktop window |
-| `test_maja.py` | Unit tests (fake model, no Ollama needed) |
+| `test_maja.py` | Unit tests (fake models, no Ollama needed) |
 
 ## Run it on Windows in VS Code
 
