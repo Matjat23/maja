@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from brain import BrainError
+from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from maja import Maja
 from server import SERVER_AVAILABLE, create_app
@@ -57,6 +58,12 @@ class FakeBrain:
         if self.error or self.save_error:
             raise self.error or self.save_error
         return {"notes": [], "new_tasks": [], "finished_task_numbers": [], **self.saves}
+
+    def see(self, messages, photo):
+        self.calls.append(list(messages) + [{"photo": photo}])
+        if self.error:
+            raise self.error
+        return self.answer
 
     def embed(self, texts):
         """A simple stand-in for an embedding model: texts sharing words get similar vectors."""
@@ -296,6 +303,36 @@ class PhoneServerTests(unittest.TestCase):
         # Commands work from the phone too.
         self.client.post("/api/chat", json={"message": "add task Water the plants"}, headers=headers)
         self.assertEqual(self.maja.data["tasks"][0]["text"], "Water the plants")
+
+
+class PhotoTests(unittest.TestCase):
+    def test_photo_questions_go_to_the_vision_model_and_the_photo_is_not_stored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("You're holding a red mug.")
+            assistant = Maja(Path(folder) / "data.json", brain)
+            answer = assistant.reply_about_photo("What am I holding?", "BASE64PHOTO")
+            self.assertEqual(answer, "You're holding a red mug.\n📷 Looked at one photo (not saved)")
+            self.assertEqual(brain.calls[0][-1], {"photo": "BASE64PHOTO"})
+            self.assertEqual(assistant.history[0]["content"], "(with a photo 📷) What am I holding?")
+            self.assertNotIn("BASE64PHOTO", (Path(folder) / "data.json").read_text(encoding="utf-8"))
+
+    def test_empty_message_asks_what_maja_sees(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("A desk.")
+            Maja(Path(folder) / "data.json", brain).reply_about_photo("", "PHOTO")
+            self.assertEqual(brain.calls[0][1]["content"], "What do you see?")
+
+    @unittest.skipUnless(CAMERA_AVAILABLE, "needs opencv-python (requirements.txt)")
+    def test_frames_are_shrunk_for_the_model_and_preview(self):
+        import base64
+        import numpy as np
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        jpeg = base64.b64decode(photo_for_model(frame))
+        self.assertEqual(jpeg[:2], b"\xff\xd8")  # A JPEG file.
+        import cv2
+        decoded = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(decoded.shape[:2], (432, 768))
+        self.assertEqual(base64.b64decode(preview_png(frame))[:4], b"\x89PNG")
 
 
 class ChunkingTests(unittest.TestCase):

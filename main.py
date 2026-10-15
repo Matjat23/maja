@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
+from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
 from reminders import describe_due, notify
@@ -49,14 +50,15 @@ def main():
         return
 
     listener = Listener() if VOICE_INPUT_AVAILABLE else None
+    camera = Camera() if CAMERA_AVAILABLE else None
     speaker = Speaker()
     # Only one thing may change Maja's data at a time: the window, the phone, or reminders.
     maja_lock = threading.Lock()
 
     root = tk.Tk()
     root.title("Maja 💜")
-    root.geometry("660x560")
-    root.minsize(460, 380)
+    root.geometry("720x620")
+    root.minsize(560, 420)
     root.configure(bg=BG)
 
     title = tk.Label(root, text="Maja  ✨", font=("Segoe UI", 24, "bold"), bg=BG, fg=PINK)
@@ -114,17 +116,20 @@ def main():
 
     def send(event=None):
         message = entry.get().strip()
-        if not message or busy:
+        frame = camera.frame() if camera is not None else None
+        if busy or not (message or frame is not None):
             return
         entry.delete(0, "end")
-        append("You", message)
+        # With the camera on, the message is about what the camera sees right now.
+        photo = photo_for_model(frame) if frame is not None else None
+        append("You 📷" if photo else "You", message or "What do you see?")
         speaker.stop()
-        set_busy(True, "Maja is thinking…")
+        set_busy(True, "Maja is looking…" if photo else "Maja is thinking…")
 
         def think():
             try:
                 with maja_lock:
-                    answer = maja.reply(message)
+                    answer = maja.reply_about_photo(message, photo) if photo else maja.reply(message)
             except OSError as error:
                 answer = f"I couldn't save that. Please check the folder permissions: {error}"
             ui_calls.put(lambda: (set_busy(False), maja_says(answer)))
@@ -209,6 +214,60 @@ def main():
     if os.name == "nt":
         tk.Button(row, text="📂", command=open_documents, bg=PANEL, fg=WHITE,
                   font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
+
+    # --- Camera: 📷 turns it on with a live preview; sending then includes a photo ---------
+    camera_frame = tk.Frame(root, bg=BG)
+    camera_label = tk.Label(camera_frame, text="● Camera on — your next message includes a photo",
+                            font=("Segoe UI", 9, "bold"), bg=BG, fg=RED)
+    camera_label.pack(anchor="w")
+    camera_preview = tk.Label(camera_frame, bg=BG)
+    camera_preview.pack(anchor="w", pady=(4, 0))
+    preview_image = None
+
+    def update_preview():
+        nonlocal preview_image
+        if camera is None or not camera.is_on:
+            return
+        frame = camera.frame()
+        if frame is not None:
+            preview_image = tk.PhotoImage(data=preview_png(frame))
+            camera_preview.configure(image=preview_image)
+        root.after(80, update_preview)
+
+    def toggle_camera():
+        if camera is None:
+            maja_says("The camera needs an extra package. In a terminal, run: "
+                      "py -m pip install -r requirements.txt  — then restart me.")
+            return
+        if camera.is_on:
+            camera.turn_off()
+            camera_frame.pack_forget()
+            camera_button.configure(bg=PANEL)
+            subtitle.configure(text=SUBTITLE)
+            return
+        try:
+            camera.turn_on()
+        except CameraError as error:
+            maja_says(str(error))
+            return
+        camera_frame.pack(before=row, anchor="w", padx=20, pady=(0, 10))
+        camera_button.configure(bg=RED)
+        subtitle.configure(text="Camera on 📷 Ask me something, like 'what am I holding?'")
+        update_preview()
+
+        def load_vision_model():
+            # The graphics card can't hold both models, so the vision model is loaded
+            # now, while Matty lines up the photo, instead of after pressing Send.
+            try:
+                brain.warm_up(brain.vision_model)
+            except BrainError:
+                pass  # Shown when Matty sends the photo.
+
+        in_background(load_vision_model)
+
+    camera_button = tk.Button(row, text="📷", command=toggle_camera, bg=PANEL, fg=WHITE,
+                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    camera_button.pack(side="left", padx=(8, 0), ipady=3)
 
     # --- Phone: 📱 turns on a small web server and shows a QR code to scan ------------------
     phone = None
@@ -319,6 +378,8 @@ def main():
     root.after(1000, check_reminders)
     def close():
         speaker.stop()
+        if camera is not None:
+            camera.turn_off()
         if phone is not None:
             phone.stop()
         root.destroy()

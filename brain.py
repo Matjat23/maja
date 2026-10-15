@@ -19,6 +19,8 @@ class OllamaBrain:
         self.model = model or os.getenv("MAJA_MODEL", "llama3.1")
         # Turns text into numbers (embeddings) so Maja can search Matty's documents.
         self.embed_model = os.getenv("MAJA_EMBED_MODEL", "nomic-embed-text")
+        # Looks at photos from the camera.
+        self.vision_model = os.getenv("MAJA_VISION_MODEL", "qwen2.5vl:3b")
         # 127.0.0.1, not "localhost": on Windows, "localhost" first tries IPv6 and
         # wastes about 2 seconds on every request.
         self.host = (host or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
@@ -62,15 +64,32 @@ class OllamaBrain:
         })
         return (data.get("message") or {}).get("content", "").strip()
 
-    def warm_up(self):
-        """Load the model into memory so the first real reply is fast."""
-        self._post("/api/generate", {"model": self.model, "keep_alive": "30m"})
+    def warm_up(self, model=None):
+        """Load a model into memory so the first real reply is fast."""
+        self._post("/api/generate", {"model": model or self.model, "keep_alive": "30m"})
 
     def chat(self, messages):
         """Send a list of {'role', 'content'} messages and return the reply text."""
         reply = self._chat(messages)
         if not reply:
             raise BrainError("The model sent an empty reply. Please try again.")
+        return reply
+
+    def see(self, messages, photo):
+        """Like chat(), but the last message comes with a photo (base64 JPEG).
+
+        Uses a separate vision model; the first photo can take a while as it loads.
+        """
+        *earlier, last = messages
+        data = self._post("/api/chat", {
+            "model": self.vision_model,
+            "messages": [*earlier, {**last, "images": [photo]}],
+            "stream": False,
+            "keep_alive": "10m",
+        })
+        reply = (data.get("message") or {}).get("content", "").strip()
+        if not reply:
+            raise BrainError("I couldn't make sense of the photo. Please try again.")
         return reply
 
     def embed(self, texts):

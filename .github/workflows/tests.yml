@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install document and phone packages
-        run: python -m pip install chromadb pypdf fastapi uvicorn httpx
+      - name: Install document, phone and camera packages
+        run: python -m pip install chromadb pypdf fastapi uvicorn httpx opencv-python-headless
       - name: Run unit tests
         run: python -m unittest -v

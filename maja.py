@@ -234,6 +234,29 @@ class Maja:
                     "this first version can do. We'll add an AI conversation engine next.")
         return self._ask_brain(message)
 
+    def reply_about_photo(self, message, photo):
+        """Answer a message about a camera photo (base64 JPEG). The photo isn't stored;
+        the chat history only records that there was one."""
+        if self.brain is None:
+            return "I need my AI model to look at photos."
+        question = message.strip() or "What do you see?"
+        system = (
+            "You are Maja, Matty's warm, encouraging personal assistant. Matty sent a photo "
+            "from their webcam together with a message. Answer the message about the photo "
+            "in a few friendly sentences. Describe only what you can actually see, and say "
+            "so if something is unclear."
+        )
+        try:
+            answer = self.brain.see([{"role": "system", "content": system},
+                                     {"role": "user", "content": question}], photo)
+        except BrainError as error:
+            return str(error)
+        self.history += [{"role": "user", "content": f"(with a photo 📷) {question}"},
+                         {"role": "assistant", "content": answer}]
+        del self.history[:-HISTORY_LIMIT]
+        self._save()
+        return answer + "\n📷 Looked at one photo (not saved)"
+
     def _notes_and_tasks(self):
         notes = "\n".join(f"- {note}" for note in self.data["notes"]) or "(none yet)"
         tasks = "\n".join(

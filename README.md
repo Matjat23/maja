@@ -51,10 +51,10 @@ It's the first step of a bigger project: Maja will get a camera and, eventually,
 2. Install [Ollama](https://ollama.com), then download Maja's AI models once: `ollama pull llama3.1` (about 4.9 GB) and `ollama pull nomic-embed-text` (about 270 MB, for documents).
 3. Open this folder in VS Code.
 4. Open **Terminal → New Terminal**.
-5. Optional, for the microphone, documents and phone: `py -m pip install -r requirements.txt`
+5. Optional, for the microphone, documents, phone and camera: `py -m pip install -r requirements.txt`
 6. Run `python main.py` (or `py main.py` if Windows does not recognize `python`).
 
-No account or API key is needed, and the AI runs entirely on your own computer. Typing works without any Python packages; only the 🎤 microphone, 📂 documents and 📱 phone need the packages in `requirements.txt`. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`).
+No account or API key is needed, and the AI runs entirely on your own computer. Typing works without any Python packages; only the 🎤 microphone, 📂 documents, 📱 phone and 📷 camera need the packages in `requirements.txt`. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`).
 
 The app creates `maja_data.json` next to `main.py` to store your notes, tasks, and recent conversation on your own computer. Do not commit that personal file to GitHub.
 
@@ -85,6 +85,14 @@ This is RAG (retrieval-augmented generation), built in `library.py`:
 6. **Answer and cite:** the model answers from those pieces. A source is listed when it was a clear match (distance up to 0.40) or the answer names it. These cut-offs were measured: questions about the documents scored 0.16–0.43, ordinary chat 0.41–0.55.
 
 Your documents and the database stay on your computer and are never committed to Git.
+
+## Camera (📷)
+
+Click 📷 to turn the camera on. A live preview with a red **● Camera on** label stays visible the whole time, and the 📷 button turns red. While it's on, your next message is about what the camera sees: hold something up and ask `What am I holding?`, `What does this label say?`, or just press Send. Click 📷 again to turn the camera off.
+
+How it works (`camera.py`): [OpenCV](https://opencv.org/) reads the webcam. When you send, the current picture is shrunk (at most 768 px) and given to a local vision model, `qwen2.5vl:3b` in Ollama (`ollama pull qwen2.5vl:3b`, about 3.2 GB). Photos only exist in memory for that one question: they are never saved to disk or sent anywhere, and the chat history only records "(with a photo 📷)".
+
+The first photo can take up to a minute: the graphics card can't hold the chat model and the vision model at the same time, so Ollama swaps them. Maja starts loading the vision model the moment you turn the camera on, so it's usually ready by the time you've lined up the shot. Use another camera with `MAJA_CAMERA=1`, or another vision model with `MAJA_VISION_MODEL`.
 
 ## Phone (📱)
 
@@ -120,13 +128,13 @@ The tests use a fake AI model and a fake embedding model, so they don't need Oll
 
 ## What this version does
 
-The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks. Before each reply, a separate step asks the model for a small structured answer about what to save (new notes, new tasks, finished tasks), so Maja can update your lists while you chat without saving questions or small talk. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. You can talk to Maja and hear her answer, tasks with a time get reminders, and she can answer questions from your own documents with sources. It does **not** see through a camera or control hardware yet.
+The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks. Before each reply, a separate step asks the model for a small structured answer about what to save (new notes, new tasks, finished tasks), so Maja can update your lists while you chat without saving questions or small talk. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. You can talk to Maja and hear her answer, tasks with a time get reminders, and she can answer questions from your own documents with sources. She can also look through the camera when you turn it on. She does **not** control hardware yet.
 
 ## Next milestones
 
 1. ~~Add a model provider so Maja can hold open-ended conversations.~~ Done (local llama3.1 via Ollama, `brain.py`), including saving notes and tasks from normal conversation.
 2. ~~Add microphone input and spoken replies.~~ Done (`voice.py`), plus reminders (`reminders.py`).
-3. Add camera input with a visible on/off control.
+3. ~~Add camera input with a visible on/off control.~~ Done (`camera.py`), plus phone access (`server.py`) and starting with Windows (`autostart.py`).
 4. Prototype the enclosure in CAD, then connect sensors and actuators through a hardware adapter.
 
-The `Maja` class in `maja.py` is the core, `brain.py` connects it to the AI model, `voice.py` handles the microphone and speaking, `reminders.py` handles due times and notifications, `library.py` reads and searches your documents, and `server.py` serves the phone page. The window in `main.py` can later be replaced by a mobile or robot interface without rewriting task storage.
+The `Maja` class in `maja.py` is the core, `brain.py` connects it to the AI model, `voice.py` handles the microphone and speaking, `reminders.py` handles due times and notifications, `library.py` reads and searches your documents, `server.py` serves the phone page, `camera.py` handles the webcam, and `autostart.py` starts Maja with Windows. The window in `main.py` can later be replaced by a mobile or robot interface without rewriting task storage.
