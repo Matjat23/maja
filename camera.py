@@ -1,6 +1,6 @@
 """Maja's eyes: the webcam, with a visible on/off control.
 
-The camera is only on while Matty has turned it on with 📷, and the window shows a live
+The camera is only on while Matty has turned it on with the Camera button, and the window shows a live
 preview the whole time. A photo is taken only when Matty sends a message while the
 camera is on. Photos are kept in memory just long enough to ask the vision model, and
 are never saved to disk or sent anywhere. Needs opencv-python (requirements.txt).

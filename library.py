@@ -78,7 +78,7 @@ class Library:
     def __init__(self, folder, database_folder, brain):
         if not LIBRARY_AVAILABLE:
             raise LibraryError("Reading documents needs extra packages. In a terminal, run: "
-                               "py -m pip install -r requirements.txt  — then restart me.")
+                               "py -m pip install -r requirements.txt, then restart me.")
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.brain = brain

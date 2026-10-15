@@ -1,19 +1,19 @@
-# Optional extras. Typing, the AI, reminders and spoken replies work without these.
+# Optional. Typing, the AI, reminders and spoken replies work without these.
 
-# Talking to Maja with the microphone (🎤)
+# Microphone
 faster-whisper>=1.2
 sounddevice>=0.5
 numpy>=2.0
 
-# Asking Maja about your own documents (📂)
+# Documents
 chromadb>=1.0
 pypdf>=5.0
 
-# Talking to Maja from your phone (📱)
+# Phone access
 fastapi>=0.110
 uvicorn>=0.30
 qrcode>=8.0
 httpx>=0.27
 
-# Showing Maja things with the camera (📷)
+# Camera
 opencv-python>=4.8

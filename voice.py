@@ -23,7 +23,7 @@ except ImportError:
 VOICE_OUTPUT_AVAILABLE = sys.platform == "win32"
 SAMPLE_RATE = 16000
 # Emoji would be read out loud ("purple heart"), so they are removed before speaking.
-EMOJI = re.compile("[\U0001F000-\U0001FFFF☀-➿️]")
+EMOJI = re.compile("[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE0F]")
 
 
 class VoiceError(Exception):

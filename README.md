@@ -1,156 +1,101 @@
-# Maja — a private, offline AI assistant
+# Maja
 
 [![Tests](https://github.com/Matjat23/maja/actions/workflows/tests.yml/badge.svg)](https://github.com/Matjat23/maja/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Runs offline](https://img.shields.io/badge/AI-runs%20locally-purple)
 
-> 🚧 **Status: in active development.** Working now: conversations, memory, voice, reminders, answers from your own documents (RAG), camera, and phone access. Next: the physical robot version.
+Maja is my personal AI assistant. She runs completely on my own laptop, with no cloud and no API keys. I can type or talk to her, she keeps my notes and to-do list, reminds me when things are due, answers questions from my own notes and PDFs, and can look through the webcam when I turn it on.
 
-Maja is a personal AI assistant that runs **entirely on your own computer**: no cloud, no API keys, no data leaving the machine. You can type or talk to her, she remembers what matters from the conversation, keeps your to-do list, reminds you when things are due, answers questions from your own notes and PDFs, and can look through the webcam when you turn it on.
+The project is still in progress. The long-term goal is a small physical robot version of Maja that sits on my desk.
 
-It's the first step of a bigger project: eventually Maja gets a small physical robot body ("desk buddy").
+<!-- Add a screenshot or demo video here -->
 
-<!-- Add a screenshot or demo GIF here, e.g. ![Maja demo](docs/demo.gif) -->
+## What she can do
 
-## Highlights
-
-- **Local LLM** — conversations run on Llama 3.1 through [Ollama](https://ollama.com), so everything stays private and works offline.
-- **Smart memory** — a two-step design: first the model returns structured JSON (enforced with a schema) describing what to save, then it writes a normal reply. Questions and small talk save nothing; every saved item is shown as a receipt.
-- **Voice in and out** — offline speech recognition with faster-whisper and spoken replies with the built-in Windows voices.
-- **Reminders** — natural-language due times ("Saturday at 6pm", "in 2 hours", "by Friday"), backed by a plain-Python date parser because the model alone got date math wrong. Maja can start with Windows so reminders work all day.
-- **RAG over your own documents** — PDFs and notes are chunked, embedded locally (nomic-embed-text) and stored in ChromaDB; answers cite their sources, with distance cut-offs measured on real questions vs. ordinary chat.
-- **Vision** — a webcam with a visible on/off control; photos go to a local vision model (Qwen2.5-VL) and are never saved.
-- **Phone access** — a small FastAPI server with a QR code and a secret key lets you chat with the same Maja from your phone on home Wi-Fi.
-- **Tested** — 35 unit tests with fake models, run on Python 3.11 and 3.13 by GitHub Actions on every push.
-- **Light core** — the core uses only the Python standard library (tkinter, urllib); voice, documents, phone and camera packages are optional.
+- Chat using Llama 3.1, running locally through [Ollama](https://ollama.com)
+- Save notes and tasks from normal conversation, and show what she saved
+- Understand reminders like "Saturday at 6pm", "in 2 hours" or "by Friday", and show a Windows notification when they're due
+- Listen through the microphone (faster-whisper) and answer out loud (Windows voices)
+- Answer questions from my own documents and say which file and page the answer came from
+- Look at what I hold up to the webcam (Qwen2.5-VL vision model)
+- Chat from my phone over home Wi-Fi
+- Start with Windows, so reminders work all day
 
 ## How it works
 
-```
- you ──▶ main.py (tkinter window, 🎤 🔊 📂 📷 📱)      phone ──▶ server.py (FastAPI)
-            │                                                    │
-            ▼                                                    ▼
-         maja.py  ── commands ("show tasks", "new chat", …) handled in code
-            │
-            ├─▶ 1. save step:  brain.py ─▶ Ollama (JSON schema, temperature 0)
-            │                   → new notes / tasks / finished tasks
-            ├─▶ 2. retrieve:   library.py ─▶ embeddings ─▶ ChromaDB (your documents)
-            ├─▶ 3. reply step: brain.py ─▶ Ollama (notes, tasks, last 20 messages, excerpts)
-            │
-            ├── camera.py     webcam ─▶ local vision model (only when 📷 is on)
-            ├── reminders.py  due-time parsing + Windows notifications
-            ├── voice.py      faster-whisper (speech → text), Windows speech (text → speech)
-            ├── autostart.py  optional start with Windows
-            └── maja_data.json  notes, tasks and chat history, stored locally
-```
+Every message goes through two calls to the local model. The first one only decides what to save (new notes, new tasks, finished tasks) and has to answer as JSON that matches a schema. The second one writes the actual reply, using my notes, my tasks, the last 20 messages and any matching parts of my documents. I split it up like this because Llama 3.1 was unreliable with tool calling: it saved almost every question as a note and sometimes refused to answer normal questions.
 
-| File | Role |
-|---|---|
-| `maja.py` | Core assistant: commands, memory, tasks, prompts |
-| `brain.py` | Talks to the local model over Ollama's HTTP API |
-| `voice.py` | Microphone input and spoken replies |
-| `reminders.py` | Due-time parsing and notifications |
-| `library.py` | Document search (RAG): extract, chunk, embed, store, retrieve |
-| `camera.py` | Webcam capture for the vision model |
-| `server.py` | Phone access (FastAPI) |
-| `autostart.py` | Start with Windows |
-| `main.py` | Desktop window |
-| `test_maja.py` | Unit tests (fake models, no Ollama needed) |
+Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
 
-## Run it on Windows in VS Code
-
-1. Install Python 3.11 or newer from python.org and select **Add Python to PATH** during installation.
-2. Install [Ollama](https://ollama.com), then download Maja's AI models once: `ollama pull llama3.1` (about 4.9 GB) and `ollama pull nomic-embed-text` (about 270 MB, for documents).
-3. Open this folder in VS Code.
-4. Open **Terminal → New Terminal**.
-5. Optional, for the microphone, documents, phone and camera: `py -m pip install -r requirements.txt`
-6. Run `python main.py` (or `py main.py` if Windows does not recognize `python`).
-
-No account or API key is needed, and the AI runs entirely on your own computer. Typing works without any Python packages; only the 🎤 microphone, 📂 documents, 📱 phone and 📷 camera need the packages in `requirements.txt`. The first reply after starting can take up to a minute while the model loads; after that, replies take a few seconds. To try a different Ollama model, set the `MAJA_MODEL` environment variable (for example `MAJA_MODEL=qwen2.5`).
-
-The app creates `maja_data.json` next to `main.py` to store your notes, tasks, and recent conversation on your own computer. Do not commit that personal file to GitHub.
-
-## Voice
-
-- **🎤 Talk:** click 🎤, speak, then click ■. Speech recognition ([faster-whisper](https://github.com/SYSTRAN/faster-whisper)) runs offline on your computer; the first time it downloads its speech model (about 150 MB). Use `MAJA_WHISPER_MODEL=small` for better accuracy (slower).
-- **🔊 Listen:** click 🔇/🔊 to turn spoken replies on or off. Maja uses the voices built into Windows.
-
-If 🎤 says it can't use the microphone, open **Windows Settings → Privacy & security → Microphone** and allow desktop apps to use it.
-
-## Reminders
-
-Tell Maja when, and the task gets a due time: `Remind me to call mom Saturday at 6pm`, `in 2 hours`, `tomorrow at 8`, `by Friday` (only a day means 09:00). When it's due, Maja shows a Windows notification and a ⏰ message in the chat (and says it out loud if 🔊 is on). Reminders only appear **while Maja is open**; anything that came due while it was closed is shown the next time you start it.
-
-To keep Maja running all day, type `start with windows`: Maja adds a shortcut to the Windows Startup folder (`autostart.py`) and opens minimized in the taskbar every time you log in, without a console window. Type `stop starting with windows` to undo it. (Ollama starts with Windows on its own.)
-
-## Documents (ask Maja about your own notes)
-
-Click 📂 to open Maja's `documents` folder and put PDFs, `.txt` or `.md` files in it (subfolders are fine). Maja reads new and changed files when she starts, or when you type `update documents`. Then just ask, for example `When is my HPC exam?`, and she answers from your files and lists them under the reply: `📚 Sources: hpc-lecture4.pdf p. 3`. If your files don't contain the answer, she says so.
-
-This is RAG (retrieval-augmented generation), built in `library.py`:
-
-1. **Extract:** text is read from each file (PDFs page by page, with [pypdf](https://pypi.org/project/pypdf/)).
-2. **Chunk:** the text is split into pieces of about 1,000 characters, keeping paragraphs together, with a small overlap so no idea is cut in half.
-3. **Embed:** each piece becomes a list of 768 numbers that captures its meaning, using the local `nomic-embed-text` model in Ollama.
-4. **Store:** the pieces and their embeddings go into a [ChromaDB](https://www.trychroma.com/) vector database in `library_db/`.
-5. **Retrieve:** a question is embedded the same way, and the closest pieces (cosine distance up to 0.45) are given to llama3.1 together with the question.
-6. **Answer and cite:** the model answers from those pieces. A source is listed when it was a clear match (distance up to 0.40) or the answer names it. These cut-offs were measured: questions about the documents scored 0.16–0.43, ordinary chat 0.41–0.55.
-
-Your documents and the database stay on your computer and are never committed to Git.
-
-## Camera (📷)
-
-Click 📷 to turn the camera on. A live preview with a red **● Camera on** label stays visible the whole time, and the 📷 button turns red. While it's on, your next message is about what the camera sees: hold something up and ask `What am I holding?`, `What does this label say?`, or just press Send. Click 📷 again to turn the camera off.
-
-How it works (`camera.py`): [OpenCV](https://opencv.org/) reads the webcam. When you send, the current picture is shrunk (at most 768 px) and given to a local vision model, `qwen2.5vl:3b` in Ollama (`ollama pull qwen2.5vl:3b`, about 3.2 GB). Photos only exist in memory for that one question: they are never saved to disk or sent anywhere, and the chat history only records "(with a photo 📷)".
-
-The first photo can take up to a minute: the graphics card can't hold the chat model and the vision model at the same time, so Ollama swaps them. Maja starts loading the vision model the moment you turn the camera on, so it's usually ready by the time you've lined up the shot. Use another camera with `MAJA_CAMERA=1`, or another vision model with `MAJA_VISION_MODEL`.
-
-## Phone (📱)
-
-Click 📱 to turn on phone access, then scan the QR code with your phone's camera. Your phone must be on the same Wi-Fi. A chat page opens that talks to the same Maja, with the same notes, tasks, reminders and documents. Chats from the phone also appear in the desktop window. Click 📱 again to turn it off; it's off every time Maja starts.
-
-How it works (`server.py`): a small [FastAPI](https://fastapi.tiangolo.com/) web server runs inside Maja on port 8765. The QR link contains a secret key after the `#`, so it never appears in server logs; the phone remembers it and sends it with every request, and anything without the right key is refused. A lock makes sure the phone, the window and the reminders never change Maja's data at the same time.
-
-The first time, Windows may ask whether Python may use the network: allow it on **private** networks. The connection is plain HTTP, so only use phone access on a network you trust, like your home Wi-Fi.
-
-## Demo mode
-
-`py main.py --demo` starts Maja with a separate, empty memory in `demo/` (kept out of Git) and the sample documents from `demo_documents/` (lecture notes PDF, running plan, Spanish words). Use it for screenshots and recordings, so your real notes, tasks and chats never appear on screen.
-
-## Try these messages
-
-- `I want to practice English every day` (Maja saves it as a note)
-- `Remind me to buy running shoes tomorrow at 5pm` (Maja adds a task with a reminder)
-- `I bought the shoes!` (Maja marks the task as done)
-- `hello`
-- `remember I want Maja to help me practice English`
-- `what do you remember?`
-- `add task sketch Maja's desk buddy shape`
-- `show tasks`
-- `finish task 1`
-- `help`
-- `Can you help me plan my study week?` (any normal question goes to the AI)
-- `new chat` (forget the conversation, keep notes and tasks)
-- `show documents` / `update documents` (see or refresh the files Maja has read)
-
-## Run the tests
+For documents I use RAG. Files are split into chunks of about 1,000 characters, turned into embeddings with `nomic-embed-text` and stored in ChromaDB. For each question the closest chunks are given to the model. I measured the cut-off on test questions: questions about the documents had a cosine distance of 0.16 to 0.43 and normal chat 0.41 to 0.55, so chunks up to 0.45 are used and a source is only listed if it's a clear match (0.40) or the answer mentions it.
 
 ```
-python -m unittest -v
+main.py (window)          server.py (phone)
+        \                    /
+         maja.py (commands, memory, prompts)
+          |-- brain.py      Ollama: chat, JSON, embeddings, vision
+          |-- library.py    documents: chunk, embed, search (ChromaDB)
+          |-- reminders.py  due times and notifications
+          |-- voice.py      speech to text and text to speech
+          |-- camera.py     webcam
+          |-- autostart.py  start with Windows
+          `-- maja_data.json  notes, tasks and chat history (local only)
 ```
 
-The tests use a fake AI model and a fake embedding model, so they don't need Ollama. The document tests need `chromadb` and `pypdf` and are skipped without them. GitHub runs them automatically on every push and pull request.
+## Setup (Windows)
 
-## What this version does
+1. Install Python 3.11 or newer (check "Add Python to PATH").
+2. Install [Ollama](https://ollama.com) and download the models:
+   ```
+   ollama pull llama3.1
+   ollama pull nomic-embed-text
+   ollama pull qwen2.5vl:3b
+   ```
+   The last two are only needed for documents and the camera.
+3. Optional packages for the microphone, documents, phone and camera:
+   ```
+   py -m pip install -r requirements.txt
+   ```
+4. Start Maja:
+   ```
+   py main.py
+   ```
 
-The app recognizes a few commands and saves notes and tasks locally. Anything that isn't a command is answered by a local AI model (llama3.1 through Ollama), which knows your saved notes and tasks. Before each reply, a separate step asks the model for a small structured answer about what to save (new notes, new tasks, finished tasks), so Maja can update your lists while you chat without saving questions or small talk. Every action is shown as a receipt under Maja's reply (📝, ✅, 🎉), so you always see what was saved. The last 20 messages are kept between restarts. You can talk to Maja and hear her answer, tasks with a time get reminders, and she can answer questions from your own documents with sources. She can also look through the camera when you turn it on. She does **not** control hardware yet.
+Typing works without any extra packages. The first reply can take up to a minute while the model loads, after that it's a few seconds. Notes, tasks and chat history are saved in `maja_data.json`, which is not committed to Git.
 
-## Next milestones
+`py main.py --demo` starts Maja with a separate empty memory and the sample files in `demo_documents/`. I use it for screenshots so my own data doesn't show.
 
-1. ~~Add a model provider so Maja can hold open-ended conversations.~~ Done (local llama3.1 via Ollama, `brain.py`), including saving notes and tasks from normal conversation.
-2. ~~Add microphone input and spoken replies.~~ Done (`voice.py`), plus reminders (`reminders.py`).
-3. ~~Add camera input with a visible on/off control.~~ Done (`camera.py`), plus phone access (`server.py`) and starting with Windows (`autostart.py`).
-4. Prototype the enclosure in CAD, then connect sensors and actuators through a hardware adapter.
+## Using it
 
-The `Maja` class in `maja.py` is the core, `brain.py` connects it to the AI model, `voice.py` handles the microphone and speaking, `reminders.py` handles due times and notifications, `library.py` reads and searches your documents, `server.py` serves the phone page, `camera.py` handles the webcam, and `autostart.py` starts Maja with Windows. The window in `main.py` can later be replaced by a mobile or robot interface without rewriting task storage.
+The buttons next to the text box:
+
+- **Mic**: click, speak, click Stop. The first time it downloads the speech model (about 150 MB).
+- **Voice on/off**: Maja reads her answers out loud.
+- **Docs**: opens the documents folder. Put PDFs, .txt or .md files there and type `update documents`.
+- **Camera**: turns the webcam on with a live preview. While it's on, the next message is about the picture, for example "What am I holding?". Photos are never saved.
+- **Phone**: starts a small web server and shows a QR code. Scan it with a phone on the same Wi-Fi. The link contains a secret key and the server refuses requests without it. It's plain HTTP, so only use it on a network you trust.
+
+Things to try:
+
+- `I want to practice English every day`
+- `Remind me to buy running shoes tomorrow at 5pm`
+- `I bought the shoes!`
+- `When is my exam?` (with the demo documents)
+- `show tasks`, `what do you remember?`, `new chat`, `help`
+- `start with windows` / `stop starting with windows`
+
+Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition) and `MAJA_CAMERA` (camera number).
+
+## Tests
+
+```
+py -m unittest
+```
+
+The tests use fake models, so they don't need Ollama. The document, phone and camera tests are skipped if those packages aren't installed. GitHub Actions runs them on Python 3.11 and 3.13.
+
+## Roadmap
+
+- [x] Conversations with a local model, memory for notes and tasks
+- [x] Voice and reminders
+- [x] Camera, documents, phone access
+- [ ] Robot version: design the case in CAD, then add sensors and motors

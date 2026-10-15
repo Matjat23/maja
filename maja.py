@@ -68,19 +68,19 @@ With open task "2. Pay rent": "I paid the rent" -> {{"notes": [], "new_tasks": [
 
 
 def task_label(task):
-    """'Call mom' or, with a due date, 'Call mom (⏰ Sat 10 Oct, 18:00)'."""
+    """'Call mom' or, with a due date, 'Call mom (due Sat 10 Oct, 18:00)'."""
     if task.get("due"):
-        return f"{task['text']} (⏰ {describe_due(task['due'])})"
+        return f"{task['text']} (due {describe_due(task['due'])})"
     return task["text"]
 
 
 def describe_update(report):
     """A short, friendly summary of Library.update()."""
-    lines = [f"📄 Read: {name}" for name in report["added"]]
-    lines += [f"🔄 Re-read (changed): {name}" for name in report["updated"]]
-    lines += [f"🗑️ Forgot (deleted): {name}" for name in report["removed"]]
-    lines += [f"⚠️ {problem}" for problem in report["problems"]]
-    return "\n".join(lines) or "My documents are up to date. 📚"
+    lines = [f"Read: {name}" for name in report["added"]]
+    lines += [f"Read again (changed): {name}" for name in report["updated"]]
+    lines += [f"Forgot (deleted): {name}" for name in report["removed"]]
+    lines += [f"Problem: {problem}" for problem in report["problems"]]
+    return "\n".join(lines) or "My documents are up to date."
 
 
 class Maja:
@@ -176,7 +176,7 @@ class Maja:
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
             self._save()
-            return "Fresh start! Your notes and tasks are still saved. 💜"
+            return "Fresh start! Your notes and tasks are still saved."
         if lower.startswith("remember "):
             note = message[9:].strip()
             if not note:
@@ -208,12 +208,12 @@ class Maja:
         if lower in {"show documents", "my documents", "update documents", "read my documents"}:
             if self.library is None:
                 return ("I can't read documents yet. In a terminal, run: "
-                        "py -m pip install -r requirements.txt  — then restart me.")
+                        "py -m pip install -r requirements.txt, then restart me.")
             if lower in {"show documents", "my documents"}:
                 files = self.library.documents()
                 if not files:
                     return f"I haven't read any documents yet. Put PDFs, .txt or .md files in {self.library.folder}"
-                return "Documents I've read:\n" + "\n".join(f"📄 {name}" for name in files)
+                return "Documents I've read:\n" + "\n".join(f"- {name}" for name in files)
             try:
                 return describe_update(self.library.update())
             except (BrainError, LibraryError) as error:
@@ -221,12 +221,12 @@ class Maja:
         if lower in {"start with windows", "start automatically"}:
             if autostart.enable():
                 return ("Done! I'll start (minimized) every time you log in to Windows, so I "
-                        "can remind you even if you forget to open me. 🚀 To undo it, type "
+                        "can remind you even if you forget to open me. To undo it, type "
                         "'stop starting with windows'.")
             return "Sorry, I couldn't add myself to Windows startup."
         if lower in {"stop starting with windows", "don't start with windows"}:
             autostart.disable()
-            return "Okay, I won't start with Windows anymore. Open me whenever you like. 💜"
+            return "Okay, I won't start with Windows anymore. Open me whenever you like."
         if lower in {"what time is it?", "time"}:
             return f"Your computer's local time is {datetime.now():%H:%M}."
         if self.brain is None:
@@ -251,11 +251,11 @@ class Maja:
                                      {"role": "user", "content": question}], photo)
         except BrainError as error:
             return str(error)
-        self.history += [{"role": "user", "content": f"(with a photo 📷) {question}"},
+        self.history += [{"role": "user", "content": f"(with a photo) {question}"},
                          {"role": "assistant", "content": answer}]
         del self.history[:-HISTORY_LIMIT]
         self._save()
-        return answer + "\n📷 Looked at one photo (not saved)"
+        return answer + "\n(Looked at one photo, not saved.)"
 
     def _notes_and_tasks(self):
         notes = "\n".join(f"- {note}" for note in self.data["notes"]) or "(none yet)"
@@ -267,7 +267,7 @@ class Maja:
     def _remember(self, message):
         """Step 1: ask the model what (if anything) to save from Matty's message.
 
-        Returns receipts like '📝 Saved note: ...' for everything that was saved.
+        Returns receipts like 'Saved note: ...' for everything that was saved.
         """
         context = ""
         if self.history and self.history[-1]["role"] == "assistant":
@@ -280,7 +280,7 @@ class Maja:
         receipts = []
         for note in changes.get("notes") or []:
             if isinstance(note, str) and note.strip() and self._add_note(note.strip()):
-                receipts.append(f"📝 Saved note: {note.strip()}")
+                receipts.append(f"Saved note: {note.strip()}")
         new_tasks = [task for task in changes.get("new_tasks") or []
                      if isinstance(task, dict) and str(task.get("text", "")).strip()]
         for new_task in new_tasks:
@@ -289,12 +289,12 @@ class Maja:
                 # Plain-Python date reading is more reliable than the model when it finds a time.
                 due = guess_due(message) or due
             task = self._add_task(str(new_task["text"]).strip(), due)
-            receipts.append(f"✅ Added task: {task_label(task)}")
+            receipts.append(f"Added task: {task_label(task)}")
         for number in changes.get("finished_task_numbers") or []:
             tasks = self.data["tasks"]
             if isinstance(number, int) and 1 <= number <= len(tasks) and not tasks[number - 1]["done"]:
                 task = self._finish_task(number)
-                receipts.append(f"🎉 Finished task: {task['text']}")
+                receipts.append(f"Finished task: {task['text']}")
         return receipts
 
     def _abilities(self):
@@ -302,15 +302,15 @@ class Maja:
         instead of guessing that she's 'just a text-based AI'."""
         speaking = ("Spoken replies are ON right now, so Matty hears your answers out loud"
                     if self.setting("speak", False) else
-                    "Spoken replies are OFF right now; Matty can turn them on with the 🔊 button")
+                    "Spoken replies are OFF right now; Matty can turn them on with the Voice button")
         seeing = ("The camera is OFF right now, so you can't see anything at the moment; Matty "
-                  "can turn it on with 📷 and then send a message about what it shows")
+                  "can turn it on with the Camera button and then send a message about what it shows")
         return (
-            "What you (Maja) can do in this app: Matty can talk to you with the 🎤 button "
+            "What you (Maja) can do in this app: Matty can talk to you with the Mic button "
             "(speech is turned into text on this computer). You can speak your replies out "
             f"loud with a Windows voice. {speaking}. You can look through the webcam, but "
-            f"only when Matty turns it on with 📷. {seeing}. You can answer questions from Matty's own documents "
-            "(📂). Matty can chat with you from their phone (📱). You run entirely on "
+            f"only when Matty turns it on with the Camera button. {seeing}. You can answer questions from Matty's own documents "
+            "(the Docs button). Matty can chat with you from their phone (the Phone button). You run entirely on "
             "Matty's own computer. Never say you are only text-based or can't speak."
         )
 
@@ -323,8 +323,7 @@ class Maja:
             return []  # Maja still answers, just without the documents.
 
     def _system_prompt(self, saved_before, receipts, excerpts):
-        # Without the emoji: the model can read "✅" as "completed".
-        just_saved = "\n".join("- " + receipt.split(" ", 1)[1] for receipt in receipts) or "(nothing)"
+        just_saved = "\n".join("- " + receipt for receipt in receipts) or "(nothing)"
         documents = ""
         if excerpts:
             documents = (
@@ -346,7 +345,7 @@ class Maja:
             "conversations or saved items that actually appear below or in this chat; "
             "never invent them. For money or health topics, give general guidance, not "
             "professional advice.\n\n"
-            "Maja's app keeps a list of notes and tasks. Tasks with a ⏰ time get a "
+            "Maja's app keeps a list of notes and tasks. Tasks with a due time get a "
             "notification at that time, but only while the Maja app is open. Tasks without "
             "a time get no reminder.\n\n"
             f"{self._abilities()}\n\n"
@@ -378,7 +377,7 @@ class Maja:
                 if hit["distance"] <= CLEAR_MATCH or source_label(hit["source"], hit["page"]) in answer]
         if used:
             sources = dict.fromkeys(source_label(hit["source"], hit["page"]) for hit in used)
-            receipts.append("📚 Sources: " + ", ".join(sources))
+            receipts.append("Sources: " + ", ".join(sources))
         text = "\n".join([answer, *receipts])
         self.history += [user_message, {"role": "assistant", "content": answer}]
         del self.history[:-HISTORY_LIMIT]
