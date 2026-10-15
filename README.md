@@ -69,6 +69,8 @@ If 🎤 says it can't use the microphone, open **Windows Settings → Privacy & 
 
 Tell Maja when, and the task gets a due time: `Remind me to call mom Saturday at 6pm`, `in 2 hours`, `tomorrow at 8`, `by Friday` (only a day means 09:00). When it's due, Maja shows a Windows notification and a ⏰ message in the chat (and says it out loud if 🔊 is on). Reminders only appear **while Maja is open**; anything that came due while it was closed is shown the next time you start it.
 
+To keep Maja running all day, type `start with windows`: Maja adds a shortcut to the Windows Startup folder (`autostart.py`) and opens minimized in the taskbar every time you log in, without a console window. Type `stop starting with windows` to undo it. (Ollama starts with Windows on its own.)
+
 ## Documents (ask Maja about your own notes)
 
 Click 📂 to open Maja's `documents` folder and put PDFs, `.txt` or `.md` files in it (subfolders are fine). Maja reads new and changed files when she starts, or when you type `update documents`. Then just ask, for example `When is my HPC exam?`, and she answers from your files and lists them under the reply: `📚 Sources: hpc-lecture4.pdf p. 3`. If your files don't contain the answer, she says so.

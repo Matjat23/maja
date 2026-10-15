@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import autostart
 from brain import BrainError
 from library import CLEAR_MATCH, LibraryError, source_label
 from reminders import DUE_FORMAT, describe_due, guess_due, parse_due
@@ -170,7 +171,7 @@ class Maja:
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
                     "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
-                    "'show documents', or 'update documents'. Put PDFs and notes in my "
+                    "'show documents', 'update documents', or 'start with windows'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
@@ -217,6 +218,15 @@ class Maja:
                 return describe_update(self.library.update())
             except (BrainError, LibraryError) as error:
                 return str(error)
+        if lower in {"start with windows", "start automatically"}:
+            if autostart.enable():
+                return ("Done! I'll start (minimized) every time you log in to Windows, so I "
+                        "can remind you even if you forget to open me. 🚀 To undo it, type "
+                        "'stop starting with windows'.")
+            return "Sorry, I couldn't add myself to Windows startup."
+        if lower in {"stop starting with windows", "don't start with windows"}:
+            autostart.disable()
+            return "Okay, I won't start with Windows anymore. Open me whenever you like. 💜"
         if lower in {"what time is it?", "time"}:
             return f"Your computer's local time is {datetime.now():%H:%M}."
         if self.brain is None:

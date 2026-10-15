@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -243,6 +244,8 @@ def main():
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
     root.protocol("WM_DELETE_WINDOW", lambda: (speaker.stop(), root.destroy()))
+    if "--minimized" in sys.argv:  # Started with Windows: wait quietly in the taskbar.
+        root.iconify()
     root.mainloop()
 
 

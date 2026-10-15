@@ -5,6 +5,7 @@ import unittest
 import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 from brain import BrainError
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
@@ -244,6 +245,20 @@ class ReminderTests(unittest.TestCase):
         for message in ["I need to buy milk", "I study at Chalmers", "at 99"]:
             with self.subTest(message=message):
                 self.assertIsNone(guess_due(message, now))
+
+
+class AutostartTests(unittest.TestCase):
+    def test_start_with_windows_commands(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assistant = Maja(Path(folder) / "data.json")
+            with mock.patch("autostart.enable", return_value=True) as enable:
+                self.assertIn("every time you log in", assistant.reply("start with windows"))
+                enable.assert_called_once()
+            with mock.patch("autostart.enable", return_value=False):
+                self.assertIn("couldn't", assistant.reply("start with windows"))
+            with mock.patch("autostart.disable") as disable:
+                self.assertIn("won't start", assistant.reply("stop starting with windows"))
+                disable.assert_called_once()
 
 
 class ChunkingTests(unittest.TestCase):
