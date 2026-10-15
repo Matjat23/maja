@@ -114,6 +114,10 @@ How it works (`server.py`): a small [FastAPI](https://fastapi.tiangolo.com/) web
 
 The first time, Windows may ask whether Python may use the network: allow it on **private** networks. The connection is plain HTTP, so only use phone access on a network you trust, like your home Wi-Fi.
 
+## Demo mode
+
+`py main.py --demo` starts Maja with a separate, empty memory in `demo/` (kept out of Git) and the sample documents from `demo_documents/` (lecture notes PDF, running plan, Spanish words). Use it for screenshots and recordings, so your real notes, tasks and chats never appear on screen.
+
 ## Try these messages
 
 - `I want to practice English every day` (Maja saves it as a note)

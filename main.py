@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import queue
+import shutil
 import sys
 import threading
 import tkinter as tk
@@ -31,17 +32,31 @@ GREY = "#6f6480"
 SUBTITLE = "Your assistant, one step at a time"
 REMINDER_CHECK_MS = 15_000
 HERE = Path(__file__).parent
-DOCUMENTS = HERE / "documents"
+# Demo mode (py main.py --demo) uses a separate folder with its own notes, tasks, chat and
+# sample documents, so recordings never show Matty's real data.
+DEMO = "--demo" in sys.argv
+DATA = HERE / "demo" if DEMO else HERE
+DOCUMENTS = DATA / "documents"
+
+
+def prepare_demo():
+    """Copy the sample documents into the demo folder the first time."""
+    DOCUMENTS.mkdir(parents=True, exist_ok=True)
+    if not any(DOCUMENTS.iterdir()):
+        for sample in (HERE / "demo_documents").iterdir():
+            shutil.copy(sample, DOCUMENTS / sample.name)
 
 
 def main():
     try:
         brain = OllamaBrain()
+        if DEMO:
+            prepare_demo()
         try:
-            library = Library(DOCUMENTS, HERE / "library_db", brain)
+            library = Library(DOCUMENTS, DATA / "library_db", brain)
         except LibraryError:
             library = None  # Maja explains how to install it when Matty asks about documents.
-        maja = Maja(HERE / "maja_data.json", brain, library)
+        maja = Maja(DATA / "maja_data.json", brain, library)
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()
@@ -364,16 +379,20 @@ def main():
                 listener.load()
             except VoiceError:
                 pass  # Shown when Matty presses 🎤.
-        if library is not None:
-            try:
-                report = library.update()
-            except (BrainError, LibraryError):
-                return  # Shown when Matty types 'update documents'.
-            if any(report.values()):
-                summary = describe_update(report)
-                ui_calls.put(lambda: maja_says("I looked through your documents folder:\n" + summary))
+
+    def read_documents():
+        # Runs alongside warm_up(), so documents are ready without waiting for the models.
+        try:
+            report = library.update()
+        except (BrainError, LibraryError):
+            return  # Shown when Matty types 'update documents'.
+        if any(report.values()):
+            summary = describe_update(report)
+            ui_calls.put(lambda: maja_says("I looked through your documents folder:\n" + summary))
 
     in_background(warm_up)
+    if library is not None:
+        in_background(read_documents)
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
     def close():

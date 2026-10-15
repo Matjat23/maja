@@ -6,3 +6,6 @@ __pycache__/
 # Matty's private documents and their search database
 documents/
 library_db/
+
+# Demo mode data (py main.py --demo)
+demo/
