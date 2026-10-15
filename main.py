@@ -12,7 +12,13 @@ from brain import BrainError, OllamaBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
 from reminders import describe_due, notify
+from server import SERVER_AVAILABLE, PhoneServer, new_key
 from voice import VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE, Listener, Speaker, VoiceError
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 
 BG = "#1b1525"
@@ -44,6 +50,8 @@ def main():
 
     listener = Listener() if VOICE_INPUT_AVAILABLE else None
     speaker = Speaker()
+    # Only one thing may change Maja's data at a time: the window, the phone, or reminders.
+    maja_lock = threading.Lock()
 
     root = tk.Tk()
     root.title("Maja 💜")
@@ -115,7 +123,8 @@ def main():
 
         def think():
             try:
-                answer = maja.reply(message)
+                with maja_lock:
+                    answer = maja.reply(message)
             except OSError as error:
                 answer = f"I couldn't save that. Please check the folder permissions: {error}"
             ui_calls.put(lambda: (set_busy(False), maja_says(answer)))
@@ -201,10 +210,75 @@ def main():
         tk.Button(row, text="📂", command=open_documents, bg=PANEL, fg=WHITE,
                   font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
 
+    # --- Phone: 📱 turns on a small web server and shows a QR code to scan ------------------
+    phone = None
+
+    def show_phone_message(message, reply):
+        ui_calls.put(lambda: (append("You (📱)", message), append("Maja", reply, "maja")))
+
+    def show_qr(link):
+        window = tk.Toplevel(root, bg=BG)
+        window.title("Maja on your phone 📱")
+        tk.Label(window, text="Scan with your phone's camera", font=("Segoe UI", 13, "bold"),
+                 bg=BG, fg=PINK).pack(padx=20, pady=(16, 8))
+        code = qrcode.QRCode(border=2)
+        code.add_data(link)
+        matrix = code.get_matrix()
+        cell = max(3, 260 // len(matrix))
+        canvas = tk.Canvas(window, width=len(matrix) * cell, height=len(matrix) * cell,
+                           bg="white", highlightthickness=0)
+        for y, line in enumerate(matrix):
+            for x, dark in enumerate(line):
+                if dark:
+                    canvas.create_rectangle(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell,
+                                            fill="black", width=0)
+        canvas.pack(padx=20)
+        tk.Label(window, text="Your phone must be on the same Wi-Fi.\nIf Windows asks about the "
+                 "firewall, allow Python on private networks.\nThe link contains your secret key, "
+                 "so don't share it.", font=("Segoe UI", 9), bg=BG, fg=WHITE,
+                 justify="center").pack(padx=20, pady=12)
+
+    def toggle_phone():
+        nonlocal phone
+        if not SERVER_AVAILABLE or qrcode is None:
+            maja_says("Phone access needs a few extra packages. In a terminal, run: "
+                      "py -m pip install -r requirements.txt  — then restart me.")
+            return
+        if phone is not None:
+            phone.stop()
+            phone = None
+            phone_button.configure(bg=PANEL)
+            maja_says("Phone access is off. 📱")
+            return
+        key = maja.setting("phone_key")
+        if not key:
+            key = new_key()
+            maja.change_setting("phone_key", key)
+        phone = PhoneServer(maja, maja_lock, key, show_phone_message)
+        try:
+            phone.start()
+        except OSError as error:
+            phone = None
+            maja_says(f"I couldn't start phone access: {error}")
+            return
+        phone_button.configure(bg=PINK)
+        maja_says("Phone access is on! 📱 Scan the QR code with your phone (same Wi-Fi). "
+                  "Click 📱 again to turn it off.")
+        show_qr(phone.link())
+
+    phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
+                             font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    phone_button.pack(side="left", padx=(8, 0), ipady=3)
+
     # --- Reminders ---------------------------------------------------------------------
     def check_reminders():
-        if not busy:  # Don't change tasks while Maja is in the middle of a reply.
-            for task in maja.due_reminders():
+        # Skip this round if Maja is busy replying (here or to the phone); try again soon.
+        if maja_lock.acquire(blocking=False):
+            try:
+                due = maja.due_reminders()
+            finally:
+                maja_lock.release()
+            for task in due:
                 maja_says(f"⏰ Reminder: {task['text']} (due {describe_due(task['due'])})")
                 in_background(lambda text=task_label(task): notify("Maja ⏰ Reminder", text))
         root.after(REMINDER_CHECK_MS, check_reminders)
@@ -243,7 +317,13 @@ def main():
     in_background(warm_up)
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
-    root.protocol("WM_DELETE_WINDOW", lambda: (speaker.stop(), root.destroy()))
+    def close():
+        speaker.stop()
+        if phone is not None:
+            phone.stop()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", close)
     if "--minimized" in sys.argv:  # Started with Windows: wait quietly in the taskbar.
         root.iconify()
     root.mainloop()

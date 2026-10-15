@@ -1,6 +1,7 @@
 import math
 import re
 import tempfile
+import threading
 import unittest
 import zlib
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from unittest import mock
 from brain import BrainError
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from maja import Maja
+from server import SERVER_AVAILABLE, create_app
 from reminders import guess_due, parse_due
 
 
@@ -259,6 +261,41 @@ class AutostartTests(unittest.TestCase):
             with mock.patch("autostart.disable") as disable:
                 self.assertIn("won't start", assistant.reply("stop starting with windows"))
                 disable.assert_called_once()
+
+
+@unittest.skipUnless(SERVER_AVAILABLE, "needs fastapi and httpx (requirements.txt)")
+class PhoneServerTests(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.temporary = tempfile.TemporaryDirectory()
+        self.maja = Maja(Path(self.temporary.name) / "data.json", FakeBrain("Hi from Maja!"))
+        self.seen = []
+        app = create_app(self.maja, threading.Lock(), "secret-key", lambda m, r: self.seen.append((m, r)))
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_page_loads_without_a_key_but_contains_no_data(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Maja", response.text)
+
+    def test_api_needs_the_right_key(self):
+        self.assertEqual(self.client.get("/api/history").status_code, 401)
+        self.assertEqual(self.client.post("/api/chat", json={"message": "hi there"},
+                                          headers={"X-Maja-Key": "wrong"}).status_code, 401)
+
+    def test_chat_from_phone_reaches_maja_and_the_window(self):
+        headers = {"X-Maja-Key": "secret-key"}
+        response = self.client.post("/api/chat", json={"message": "Hello from my phone"}, headers=headers)
+        self.assertEqual(response.json(), {"reply": "Hi from Maja!"})
+        self.assertEqual(self.seen, [("Hello from my phone", "Hi from Maja!")])
+        history = self.client.get("/api/history", headers=headers).json()["messages"]
+        self.assertEqual(history[0], {"role": "user", "content": "Hello from my phone"})
+        # Commands work from the phone too.
+        self.client.post("/api/chat", json={"message": "add task Water the plants"}, headers=headers)
+        self.assertEqual(self.maja.data["tasks"][0]["text"], "Water the plants")
 
 
 class ChunkingTests(unittest.TestCase):
