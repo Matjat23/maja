@@ -4,6 +4,7 @@ Nothing leaves your computer: Ollama runs the model locally, and this module tal
 to it over http://localhost. Change the model with the MAJA_MODEL environment variable.
 """
 
+import contextlib
 import json
 import os
 import urllib.error
@@ -30,14 +31,23 @@ class OllamaBrain:
         self.timeout = timeout
 
     def _post(self, path, payload):
+        with self._errors(payload):
+            with self._open(path, payload) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+    def _open(self, path, payload):
         request = urllib.request.Request(
             self.host + path,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
+        return urllib.request.urlopen(request, timeout=self.timeout)
+
+    @contextlib.contextmanager
+    def _errors(self, payload):
+        """Turn network and Ollama errors into BrainError with a message Matty can act on."""
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+            yield
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 model = payload.get("model", self.model)
@@ -74,6 +84,22 @@ class OllamaBrain:
         if not reply:
             raise BrainError("The model sent an empty reply. Please try again.")
         return reply
+
+    def chat_stream(self, messages):
+        """Like chat(), but yields the reply in small pieces while the model writes it."""
+        payload = {"model": self.model, "messages": messages, "stream": True, "keep_alive": "30m"}
+        with self._errors(payload):
+            with self._open("/api/chat", payload) as response:
+                # Ollama sends one JSON object per line until "done" is true.
+                for line in response:
+                    if not line.strip():
+                        continue
+                    part = json.loads(line)
+                    piece = (part.get("message") or {}).get("content", "")
+                    if piece:
+                        yield piece
+                    if part.get("done"):
+                        break
 
     def see(self, messages, photo):
         """Like chat(), but the last message comes with a photo (base64 JPEG).

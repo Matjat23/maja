@@ -159,7 +159,13 @@ class Maja:
         self._save()
         return task
 
-    def reply(self, message: str) -> str:
+    def reply(self, message: str, on_text=None) -> str:
+        """Answer a message and return the full reply.
+
+        If on_text is given, it's called with each new piece of the AI's answer while the
+        model is still writing, so the window can show the words as they arrive. Commands
+        are answered at once and don't call it.
+        """
         message = message.strip()
         lower = message.lower()
         if not message:
@@ -171,7 +177,7 @@ class Maja:
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
                     "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
-                    "'show documents', 'update documents', or 'start with windows'. Put PDFs and notes in my "
+                    "'show documents', 'update documents', 'briefing', or 'start with windows'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
@@ -229,10 +235,73 @@ class Maja:
             return "Okay, I won't start with Windows anymore. Open me whenever you like. 💜"
         if lower in {"what time is it?", "time"}:
             return f"Your computer's local time is {datetime.now():%H:%M}."
+        if lower in {"briefing", "morning briefing", "my day", "what's my day?", "what's my day"}:
+            return self.morning_briefing()
         if self.brain is None:
             return ("I can't answer open-ended questions yet. Type 'help' to see what "
                     "this first version can do. We'll add an AI conversation engine next.")
-        return self._ask_brain(message)
+        return self._ask_brain(message, on_text)
+
+    def briefing_due(self, now=None):
+        """True once per day, from 5 in the morning, until the briefing has been shown."""
+        now = now or datetime.now()
+        return now.hour >= 5 and self.setting("last_briefing") != f"{now:%Y-%m-%d}"
+
+    def morning_briefing(self, now=None):
+        """Today's overview: a short greeting from the model, then the facts from the task
+        list. The facts are written by code, so nothing gets left out or made up."""
+        now = now or datetime.now()
+        self.change_setting("last_briefing", f"{now:%Y-%m-%d}")
+        today = now.date()
+        open_tasks = [task for task in self.data["tasks"] if not task["done"]]
+
+        def due(task):
+            return datetime.strptime(task["due"], DUE_FORMAT)
+
+        timed = sorted((task for task in open_tasks if task.get("due")), key=due)
+        due_today = [task for task in timed if due(task).date() == today]
+        overdue = [task for task in timed if due(task).date() < today]
+        this_week = [task for task in timed if today < due(task).date() <= today + timedelta(days=7)]
+        undated = [task for task in open_tasks if not task.get("due")]
+
+        lines = [f"Today, {now:%A %d %B}:"]
+        lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today] or ["Nothing is due today."]
+        if overdue:
+            lines.append("Overdue:")
+            lines += [f"⚠️ {task['text']} (was due {describe_due(task['due'])})" for task in overdue]
+        if this_week:
+            lines.append("Coming up this week:")
+            lines += [f"📅 {due(task):%a %d %b}: {task['text']}" for task in this_week]
+        if undated:
+            lines.append(f"📝 {len(undated)} more open task{'s' if len(undated) != 1 else ''} "
+                         "without a date (type 'show tasks').")
+        facts = "\n".join(lines)
+        return f"{self._briefing_greeting(now, facts)}\n\n{facts}"
+
+    def _briefing_greeting(self, now, facts):
+        part_of_day = "morning" if now.hour < 12 else "afternoon" if now.hour < 18 else "evening"
+        fallback = f"Good {part_of_day}, Matty! 💜"
+        if self.brain is None:
+            return fallback
+        notes = "\n".join(f"- {note}" for note in self.data["notes"]) or "(none)"
+        try:
+            greeting = self.brain.chat([
+                {"role": "system", "content": (
+                    "You are Maja, Matty's warm personal assistant. Write a greeting of one or "
+                    f"two short sentences for Matty's {part_of_day} overview. It starts with "
+                    f"'Good {part_of_day}, Matty'. Encourage them for what's on the list below, "
+                    "and if it fits, mention one of their goals. Don't list the tasks again (they "
+                    "are shown below your greeting) and don't invent anything: you don't know "
+                    "how Matty's day has gone. Example: 'Good morning, Matty! Two things today "
+                    "and your essay is due Thursday, so a calm start will help.'")},
+                {"role": "user", "content": f"Today's overview:\n{facts}\n\nMatty's notes and goals:\n{notes}"},
+            ]).strip()
+        except BrainError:
+            return fallback
+        # Small models sometimes stop early or wander off; then the plain greeting is better.
+        if not greeting.startswith(f"Good {part_of_day}") or len(greeting) < 30 or len(greeting) > 300:
+            return fallback
+        return greeting
 
     def reply_about_photo(self, message, photo):
         """Answer a message about a camera photo (base64 JPEG). The photo isn't stored;
@@ -357,7 +426,7 @@ class Maja:
             f"{documents}"
         )
 
-    def _ask_brain(self, message):
+    def _ask_brain(self, message, on_text=None):
         saved_before = self._notes_and_tasks()
         try:
             receipts = self._remember(message)
@@ -367,11 +436,21 @@ class Maja:
             receipts = []
         excerpts = self._search_documents(message)
         user_message = {"role": "user", "content": message}
+        messages = [
+            {"role": "system", "content": self._system_prompt(saved_before, receipts, excerpts)},
+            *self.history, user_message,
+        ]
         try:
-            answer = self.brain.chat([
-                {"role": "system", "content": self._system_prompt(saved_before, receipts, excerpts)},
-                *self.history, user_message,
-            ])
+            if on_text is None:
+                answer = self.brain.chat(messages)
+            else:
+                pieces = []
+                for piece in self.brain.chat_stream(messages):
+                    pieces.append(piece)
+                    on_text(piece)
+                answer = "".join(pieces).strip()
+                if not answer:
+                    raise BrainError("The model sent an empty reply. Please try again.")
         except BrainError as error:
             return "\n".join([str(error), *receipts])
         used = [hit for hit in excerpts

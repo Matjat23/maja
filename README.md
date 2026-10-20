@@ -11,7 +11,8 @@ The project is still in progress. The long-term goal is a small physical robot v
 
 ## What she can do
 
-- Chat using Llama 3.1, running locally through [Ollama](https://ollama.com)
+- Chat using Llama 3.1, running locally through [Ollama](https://ollama.com). Answers appear word by word while the model writes them.
+- Give me an overview of my day once every morning: what's due today, what's overdue and what's coming up this week
 - Save notes and tasks from normal conversation, and show what she saved
 - Understand reminders like "Saturday at 6pm", "in 2 hours" or "by Friday", and show a Windows notification when they're due
 - Listen through the microphone (faster-whisper) and answer out loud (Windows voices)
@@ -23,6 +24,8 @@ The project is still in progress. The long-term goal is a small physical robot v
 ## How it works
 
 Every message goes through two calls to the local model. The first one only decides what to save (new notes, new tasks, finished tasks) and has to answer as JSON that matches a schema. The second one writes the actual reply, using my notes, my tasks, the last 20 messages and any matching parts of my documents. I split it up like this because Llama 3.1 was unreliable with tool calling: it saved almost every question as a note and sometimes refused to answer normal questions.
+
+The daily overview works the same way: the list of tasks is built by code, so nothing gets left out or made up, and the model only writes the short greeting above it.
 
 Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
 
@@ -80,6 +83,7 @@ Things to try:
 - `Remind me to buy running shoes tomorrow at 5pm`
 - `I bought the shoes!`
 - `When is my exam?` (with the demo documents)
+- `briefing` (the daily overview, also shown automatically the first time Maja runs each day after 5 am)
 - `show tasks`, `what do you remember?`, `new chat`, `help`
 - `start with windows` / `stop starting with windows`
 

@@ -105,6 +105,36 @@ def main():
         if maja.setting("speak", False):
             speaker.speak(text)
 
+    # While the model writes, its words are added to one "Maja: ..." line as they arrive.
+    # When the reply is finished, that line is replaced by the full reply (with receipts).
+    streaming = False
+
+    def show_piece(piece):
+        nonlocal streaming
+        conversation.configure(state="normal")
+        if not streaming:
+            streaming = True
+            conversation.insert("end", "Maja: ", "maja")
+            conversation.mark_set("reply_start", "end-1c")
+            conversation.mark_gravity("reply_start", "left")
+        conversation.insert("end", piece, "maja")
+        conversation.configure(state="disabled")
+        conversation.see("end")
+
+    def finish_reply(text):
+        nonlocal streaming
+        if not streaming:
+            maja_says(text)
+            return
+        streaming = False
+        conversation.configure(state="normal")
+        conversation.delete("reply_start", "end-1c")
+        conversation.insert("end", f"{text}\n\n", "maja")
+        conversation.configure(state="disabled")
+        conversation.see("end")
+        if maja.setting("speak", False):
+            speaker.speak(text)
+
     # Slow work (the AI model, speech recognition) runs on background threads. They hand
     # results back through this queue, because only the main thread may touch the window.
     ui_calls = queue.Queue()
@@ -115,7 +145,7 @@ def main():
                 ui_calls.get_nowait()()
             except queue.Empty:
                 break
-        root.after(100, run_ui_calls)
+        root.after(40, run_ui_calls)  # Often enough for words to appear smoothly.
 
     def in_background(work):
         threading.Thread(target=work, daemon=True).start()
@@ -143,13 +173,19 @@ def main():
         speaker.stop()
         set_busy(True, "Maja is looking…" if photo else "Maja is thinking…")
 
+        def on_text(piece):
+            ui_calls.put(lambda: show_piece(piece))
+
         def think():
             try:
                 with maja_lock:
-                    answer = maja.reply_about_photo(message, photo) if photo else maja.reply(message)
+                    if photo:
+                        answer = maja.reply_about_photo(message, photo)
+                    else:
+                        answer = maja.reply(message, on_text=on_text)
             except OSError as error:
                 answer = f"I couldn't save that. Please check the folder permissions: {error}"
-            ui_calls.put(lambda: (set_busy(False), maja_says(answer)))
+            ui_calls.put(lambda: (set_busy(False), finish_reply(answer)))
 
         in_background(think)
 
@@ -357,7 +393,20 @@ def main():
             for task in due:
                 maja_says(f"⏰ Reminder: {task['text']} (due {describe_due(task['due'])})")
                 in_background(lambda text=task_label(task): notify("Maja ⏰ Reminder", text))
+        if not busy and maja.briefing_due():
+            show_briefing()
         root.after(REMINDER_CHECK_MS, check_reminders)
+
+    # --- Briefing: once a day (from 5 am), or when Matty types 'briefing' ----------------
+    def show_briefing():
+        set_busy(True, "Maja is looking at your day...")
+
+        def prepare():
+            with maja_lock:
+                text = maja.morning_briefing()
+            ui_calls.put(lambda: (set_busy(False), maja_says(text)))
+
+        in_background(prepare)
 
     # --- Start ---------------------------------------------------------------------------
     for past in maja.history:

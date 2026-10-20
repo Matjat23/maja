@@ -59,6 +59,13 @@ class FakeBrain:
             raise self.error or self.save_error
         return {"notes": [], "new_tasks": [], "finished_task_numbers": [], **self.saves}
 
+    def chat_stream(self, messages):
+        """Hands out the answer word by word, like a real model writing it."""
+        answer = self.chat(messages)
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            yield word if i == len(words) - 1 else word + " "
+
     def see(self, messages, photo):
         self.calls.append(list(messages) + [{"photo": photo}])
         if self.error:
@@ -316,6 +323,80 @@ class AbilityTests(unittest.TestCase):
             assistant.reply("Can you talk now?")
             self.assertIn("Spoken replies are ON", brain.calls[-1][0]["content"])
             self.assertIn("webcam", brain.calls[-1][0]["content"])
+
+
+class StreamingTests(unittest.TestCase):
+    def test_reply_arrives_in_pieces_and_ends_with_receipts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("Sure, I will remind you.", {"new_tasks": [{"text": "Call mom", "due": ""}]})
+            assistant = Maja(Path(folder) / "data.json", brain)
+            pieces = []
+            answer = assistant.reply("Remind me to call mom", on_text=pieces.append)
+            self.assertEqual(pieces, ["Sure, ", "I ", "will ", "remind ", "you."])
+            self.assertEqual(answer, "Sure, I will remind you.\n✅ Added task: Call mom")
+            self.assertEqual(assistant.history[-1]["content"], "Sure, I will remind you.")
+
+    def test_commands_answer_at_once_without_pieces(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pieces = []
+            assistant = Maja(Path(folder) / "data.json", FakeBrain())
+            assistant.reply("show tasks", on_text=pieces.append)
+            self.assertEqual(pieces, [])
+
+    def test_errors_while_streaming_are_shown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assistant = Maja(Path(folder) / "data.json", FakeBrain(error=BrainError("I can't reach Ollama.")))
+            self.assertEqual(assistant.reply("Hi there!", on_text=lambda piece: None), "I can't reach Ollama.")
+
+
+class BriefingTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.brain = FakeBrain("Good morning, Matty! You've got this.")
+        self.maja = Maja(Path(self.temporary.name) / "data.json", self.brain)
+        self.maja.data["notes"] = ["Matty wants to run 5 km by spring"]
+        self.maja.data["tasks"] = [
+            {"text": "Call mom", "done": False, "due": "2026-10-19 18:00"},
+            {"text": "Gym", "done": False, "due": "2026-10-19 07:30"},
+            {"text": "Pay rent", "done": False, "due": "2026-10-17 09:00"},
+            {"text": "Hand in essay", "done": False, "due": "2026-10-22 09:00"},
+            {"text": "Next month", "done": False, "due": "2026-11-20 09:00"},
+            {"text": "Old done task", "done": True, "due": "2026-10-19 08:00"},
+            {"text": "Buy milk", "done": False},
+        ]
+        self.now = datetime(2026, 10, 19, 7, 0)  # A Monday morning.
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_briefing_lists_today_overdue_and_this_week(self):
+        text = self.maja.morning_briefing(self.now)
+        self.assertEqual(text, (
+            "Good morning, Matty! You've got this.\n\n"
+            "Today, Monday 19 October:\n"
+            "⏰ 07:30 Gym\n"
+            "⏰ 18:00 Call mom\n"
+            "Overdue:\n"
+            "⚠️ Pay rent (was due Sat 17 Oct, 09:00)\n"
+            "Coming up this week:\n"
+            "📅 Thu 22 Oct: Hand in essay\n"
+            "📝 1 more open task without a date (type 'show tasks')."
+        ))
+        # The model gets the facts and Matty's goals to write the greeting.
+        self.assertIn("run 5 km", self.brain.calls[-1][1]["content"])
+
+    def test_briefing_is_due_once_per_day_from_5_am(self):
+        self.assertFalse(self.maja.briefing_due(datetime(2026, 10, 19, 4, 59)))
+        self.assertTrue(self.maja.briefing_due(self.now))
+        self.maja.morning_briefing(self.now)
+        self.assertFalse(self.maja.briefing_due(datetime(2026, 10, 19, 15, 0)))
+        self.assertTrue(self.maja.briefing_due(datetime(2026, 10, 20, 6, 0)))
+
+    def test_quiet_day_and_no_model(self):
+        self.maja.brain = None
+        self.maja.data["tasks"] = []
+        self.assertEqual(self.maja.morning_briefing(datetime(2026, 10, 19, 19, 0)),
+                         "Good evening, Matty! 💜\n\nToday, Monday 19 October:\nNothing is due today.")
 
 
 class PhotoTests(unittest.TestCase):
