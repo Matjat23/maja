@@ -9,3 +9,6 @@ library_db/
 
 # Demo mode data (py main.py --demo)
 demo/
+
+# Piper voice files (about 60 MB each, downloaded separately)
+voices/

@@ -13,6 +13,8 @@ from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from maja import Maja
 from server import SERVER_AVAILABLE, create_app
+from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
+                   text_for_speech)
 from reminders import guess_due, parse_due
 
 
@@ -397,6 +399,56 @@ class BriefingTests(unittest.TestCase):
         self.maja.data["tasks"] = []
         self.assertEqual(self.maja.morning_briefing(datetime(2026, 10, 19, 19, 0)),
                          "Good evening, Matty! 💜\n\nToday, Monday 19 October:\nNothing is due today.")
+
+
+class VoiceTests(unittest.TestCase):
+    def test_wake_phrase(self):
+        self.assertEqual(parse_wake("Hey Maja, what's my day?"), (True, "what's my day?"))
+        self.assertEqual(parse_wake("Hey Maya. Remind me to drink water."), (True, "Remind me to drink water"))
+        self.assertEqual(parse_wake("Okay Maja, show tasks."), (True, "show tasks"))
+        self.assertEqual(parse_wake("Hey Maja."), (True, ""))
+        self.assertEqual(parse_wake("I was talking to Maria yesterday."), (False, ""))
+        self.assertEqual(parse_wake("Tell Maja I said hi."), (False, ""))
+
+    def test_only_words_are_spoken(self):
+        self.assertEqual(text_for_speech("**Great** job! 💜\n✅ Added task: Gym\n📚 Sources: notes.pdf p. 3"),
+                         "Great job! \n Added task: Gym")
+        self.assertEqual(split_sentences("Hi Matty! How are you?\nI'm fine."),
+                         ["Hi Matty!", "How are you?", "I'm fine."])
+
+    def test_streamed_reply_is_spoken_sentence_by_sentence(self):
+        class RecordingSpeaker(Speaker):
+            neural = True
+
+            def say(self, text):
+                said.append(text)
+
+        said = []
+        speaker = RecordingSpeaker()
+        for piece in ["Good ", "morning, Matty", "! You have ", "two tasks", ". Want help", "?"]:
+            speaker.feed(piece)
+        self.assertEqual(said, ["Good morning, Matty!", "You have two tasks."])
+        speaker.flush("\n✅ Added task: Gym")
+        self.assertEqual(said[-1], "Want help?\n\n✅ Added task: Gym")
+
+    @unittest.skipUnless(VOICE_INPUT_AVAILABLE, "needs numpy, sounddevice and faster-whisper")
+    def test_microphone_sound_is_cut_into_pieces_of_speech(self):
+        import queue as queue_module
+        import numpy as np
+        rate = 16000
+        quiet = lambda seconds: np.zeros(int(rate * seconds), np.float32)
+        loud = lambda seconds: (0.1 * np.sin(np.arange(int(rate * seconds)) * 0.2)).astype(np.float32)
+        click = loud(0.1)  # Too short to be speech.
+        audio = np.concatenate([quiet(1), loud(1.0), quiet(0.3), loud(0.5), quiet(1.2), click, quiet(1.5)])
+        blocks = queue_module.Queue()
+        for start in range(0, len(audio) - 480, 480):
+            blocks.put(audio[start:start + 480])
+        blocks.put(None)
+        listener = WakeListener(None, None, None)
+        pieces = list(listener.pieces_of_speech(blocks))
+        # One piece: the short pause inside it doesn't split it, and the click is ignored.
+        self.assertEqual(len(pieces), 1)
+        self.assertGreater(len(pieces[0]) / rate, 1.8)
 
 
 class PhotoTests(unittest.TestCase):

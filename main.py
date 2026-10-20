@@ -15,7 +15,8 @@ from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
 from reminders import describe_due, notify
 from server import SERVER_AVAILABLE, PhoneServer, new_key
-from voice import VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE, Listener, Speaker, VoiceError
+from voice import (NEURAL_VOICE_AVAILABLE, VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE,
+                   Listener, Speaker, VoiceError, WakeListener, installed_voices)
 
 try:
     import qrcode
@@ -66,7 +67,7 @@ def main():
 
     listener = Listener() if VOICE_INPUT_AVAILABLE else None
     camera = Camera() if CAMERA_AVAILABLE else None
-    speaker = Speaker()
+    speaker = Speaker(maja.setting("voice"))
     # Only one thing may change Maja's data at a time: the window, the phone, or reminders.
     maja_lock = threading.Lock()
 
@@ -100,26 +101,37 @@ def main():
         conversation.configure(state="disabled")
         conversation.see("end")
 
+    # Replies are spoken when Voice is on, and always when Matty asked by voice ("Hey Maja").
+    asked_by_voice = False
+
+    def speak_replies():
+        return maja.setting("speak", False) or asked_by_voice
+
     def maja_says(text):
         append("Maja", text, "maja")
-        if maja.setting("speak", False):
+        if speak_replies():
             speaker.speak(text)
 
-    # While the model writes, its words are added to one "Maja: ..." line as they arrive.
-    # When the reply is finished, that line is replaced by the full reply (with receipts).
+    # While the model writes, its words are added to one "Maja: ..." line as they arrive,
+    # and with a neural voice each finished sentence is already spoken. When the reply is
+    # done, the line is replaced by the full reply (with receipts).
     streaming = False
+    streamed = ""
 
     def show_piece(piece):
-        nonlocal streaming
+        nonlocal streaming, streamed
         conversation.configure(state="normal")
         if not streaming:
-            streaming = True
+            streaming, streamed = True, ""
             conversation.insert("end", "Maja: ", "maja")
             conversation.mark_set("reply_start", "end-1c")
             conversation.mark_gravity("reply_start", "left")
         conversation.insert("end", piece, "maja")
         conversation.configure(state="disabled")
         conversation.see("end")
+        streamed += piece
+        if speak_replies():
+            speaker.feed(piece)
 
     def finish_reply(text):
         nonlocal streaming
@@ -132,8 +144,10 @@ def main():
         conversation.insert("end", f"{text}\n\n", "maja")
         conversation.configure(state="disabled")
         conversation.see("end")
-        if maja.setting("speak", False):
-            speaker.speak(text)
+        if speak_replies():
+            # The answer itself was fed sentence by sentence; add the receipts after it.
+            answer = streamed.strip()
+            speaker.flush(text[len(answer):] if text.startswith(answer) else "")
 
     # Slow work (the AI model, speech recognition) runs on background threads. They hand
     # results back through this queue, because only the main thread may touch the window.
@@ -153,20 +167,32 @@ def main():
     # --- Typing and sending ---------------------------------------------------------
     busy = False
 
-    def set_busy(value, status=SUBTITLE):
+    def idle_status():
+        if wake is not None and wake.running:
+            return "Listening for \"Hey Maja\" 👂"
+        return SUBTITLE
+
+    def set_busy(value, status=None):
         nonlocal busy
         busy = value
-        subtitle.configure(text=status)
+        subtitle.configure(text=status or idle_status())
         state = "disabled" if value else "normal"
         send_button.configure(state=state)
         mic_button.configure(state=state)
 
-    def send(event=None):
+    def send(event=None, by_voice=False):
+        nonlocal asked_by_voice
         message = entry.get().strip()
         frame = camera.frame() if camera is not None else None
         if busy or not (message or frame is not None):
             return
         entry.delete(0, "end")
+        asked_by_voice = by_voice
+        command, _, name = message.partition(" ")
+        if command.lower() in {"voice", "voices"}:
+            append("You", message)
+            change_voice(name.strip())
+            return
         # With the camera on, the message is about what the camera sees right now.
         photo = photo_for_model(frame) if frame is not None else None
         append("You 📷" if photo else "You", message or "What do you see?")
@@ -234,7 +260,7 @@ def main():
                 else:
                     entry.delete(0, "end")
                     entry.insert(0, text)
-                    send()
+                    send(by_voice=True)
 
             ui_calls.put(show)
 
@@ -256,6 +282,84 @@ def main():
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
     if VOICE_OUTPUT_AVAILABLE:
         speak_button.pack(side="left", padx=(8, 0), ipady=3)
+
+    def change_voice(name):
+        """'voice' lists the installed voices; 'voice amy' switches to the one matching 'amy'."""
+        voices = installed_voices()
+        if not voices:
+            maja_says("I only have the Windows voice right now. See the README for how to "
+                      "download a natural voice into the voices folder.")
+            return
+        if not name:
+            maja_says(f"My voice is {speaker.voice}. Installed voices: {', '.join(voices)}. "
+                      "Type 'voice' and a name to switch, for example 'voice amy'.")
+            return
+        matches = [voice for voice in voices if name.lower() in voice.lower()]
+        if len(matches) != 1:
+            maja_says(f"I couldn't find exactly one voice matching '{name}'. "
+                      f"Installed voices: {', '.join(voices)}.")
+            return
+        speaker.voice = matches[0]
+        maja.change_setting("voice", matches[0])
+        append("Maja", f"Okay, this is my new voice: {matches[0]}.", "maja")
+        speaker.speak("Hi Matty! This is how I sound now. Do you like it?")
+
+    # --- "Hey Maja": the ear button listens hands-free, only while it's turned on --------
+    wake = None
+
+    def heard_wake_word():
+        def show():
+            speaker.stop()
+            subtitle.configure(text="Yes? I'm listening... 👂")
+            in_background(chime)
+        ui_calls.put(show)
+
+    def heard_message(text):
+        def show():
+            if busy:
+                return
+            entry.delete(0, "end")
+            entry.insert(0, text)
+            send(by_voice=True)
+        ui_calls.put(show)
+
+    def chime():
+        if NEURAL_VOICE_AVAILABLE:  # Needs numpy and sounddevice, like the neural voice.
+            import numpy as np
+            import sounddevice as sd
+            t = np.linspace(0, 0.18, int(16000 * 0.18), endpoint=False)
+            tone = 0.15 * np.sin(2 * np.pi * 880 * t) * np.exp(-12 * t)
+            sd.play(tone.astype(np.float32), 16000)
+
+    def toggle_wake():
+        nonlocal wake
+        if listener is None:
+            maja_says("Listening for 'Hey Maja' needs a few extra packages. In a terminal, run: "
+                      "py -m pip install -r requirements.txt, then restart me.")
+            return
+        if wake is not None and wake.running:
+            wake.stop()
+            maja.change_setting("wake", False)
+            wake_button.configure(bg=PANEL)
+            subtitle.configure(text=idle_status())
+            return
+        # Pause while Maja talks (so she doesn't hear herself), while she's busy and while
+        # the mic button is recording.
+        wake = WakeListener(listener, heard_wake_word, heard_message,
+                            paused=lambda: busy or speaker.speaking or listener.recording)
+        try:
+            wake.start()
+        except VoiceError as error:
+            maja_says(str(error))
+            return
+        maja.change_setting("wake", True)
+        wake_button.configure(bg=PINK)
+        subtitle.configure(text=idle_status())
+
+    wake_button = tk.Button(row, text="👂", command=toggle_wake, bg=PANEL, fg=WHITE,
+                            font=("Segoe UI Emoji", 12), relief="flat", padx=10)
+    if listener is not None:
+        wake_button.pack(side="left", padx=(8, 0), ipady=3)
 
     # --- Documents: the folder button opens the folder; new files are read when Maja starts ---------------
     def open_documents():
@@ -430,6 +534,10 @@ def main():
                 listener.load()
             except VoiceError:
                 pass  # Shown when Matty presses the mic button.
+        try:
+            speaker.load()  # The neural voice takes a few seconds to load the first time.
+        except Exception:
+            pass  # Maja falls back to the Windows voice.
 
     def read_documents():
         # Runs alongside warm_up(), so documents are ready without waiting for the models.
@@ -446,8 +554,13 @@ def main():
         in_background(read_documents)
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
+    if maja.setting("wake", False):
+        root.after(500, toggle_wake)  # It was on last time, so it stays on (button shows it).
+
     def close():
         speaker.stop()
+        if wake is not None:
+            wake.stop()
         if camera is not None:
             camera.turn_off()
         if phone is not None:

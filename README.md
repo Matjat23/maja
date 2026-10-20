@@ -15,7 +15,8 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Give me an overview of my day once every morning: what's due today, what's overdue and what's coming up this week
 - Save notes and tasks from normal conversation, and show what she saved
 - Understand reminders like "Saturday at 6pm", "in 2 hours" or "by Friday", and show a Windows notification when they're due
-- Listen through the microphone (faster-whisper) and answer out loud (Windows voices)
+- Listen through the microphone (faster-whisper) and answer out loud with a natural neural voice (Piper), sentence by sentence while the reply is still being written
+- Wake up hands-free when I say "Hey Maja", for example "Hey Maja, what's my day?"
 - Answer questions from my own documents and say which file and page the answer came from
 - Look at what I hold up to the webcam (Qwen2.5-VL vision model)
 - Chat from my phone over home Wi-Fi
@@ -26,6 +27,8 @@ The project is still in progress. The long-term goal is a small physical robot v
 Every message goes through two calls to the local model. The first one only decides what to save (new notes, new tasks, finished tasks) and has to answer as JSON that matches a schema. The second one writes the actual reply, using my notes, my tasks, the last 20 messages and any matching parts of my documents. I split it up like this because Llama 3.1 was unreliable with tool calling: it saved almost every question as a note and sometimes refused to answer normal questions.
 
 The daily overview works the same way: the list of tasks is built by code, so nothing gets left out or made up, and the model only writes the short greeting above it.
+
+For "Hey Maja" there is no ready-made wake word model for her name, so I built it from the speech recognition Maja already has. A simple loudness check cuts the microphone sound into short pieces of speech (keeping the 0.4 seconds before each piece, otherwise the quiet start of "Hey" gets lost), and only those pieces are transcribed. If a piece starts with "Hey Maja" (or "Maya", "Maia", which is how Whisper often spells it), the rest is the message. Listening pauses while Maja is talking so she doesn't hear herself. I tested it by having other Piper voices say wake phrases and normal sentences into the same code: 34 of 36 were right and none of the normal sentences woke her.
 
 Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
 
@@ -54,10 +57,15 @@ main.py (window)          server.py (phone)
    ollama pull qwen2.5vl:3b
    ```
    The last two are only needed for documents and the camera.
-3. Optional packages for the microphone, documents, phone and camera:
+3. Optional packages for the microphone, voice, documents, phone and camera:
    ```
    py -m pip install -r requirements.txt
    ```
+   For the natural voice, download at least one Piper voice into `voices/` (about 60 MB each):
+   ```
+   py -m piper.download_voices --download-dir voices en_US-hfc_female-medium
+   ```
+   Without a Piper voice, Maja uses the Windows voice.
 4. Start Maja:
    ```
    py main.py
@@ -71,9 +79,10 @@ Typing works without any extra packages. The first reply can take up to a minute
 
 The buttons next to the text box:
 
-- **Mic**: click, speak, click Stop. The first time it downloads the speech model (about 150 MB).
-- **Voice on/off**: Maja reads her answers out loud.
-- **Docs**: opens the documents folder. Put PDFs, .txt or .md files there and type `update documents`.
+- **Mic**: click, speak, click again to send. The first time it downloads the speech model (about 150 MB). When I ask by voice, Maja always answers out loud.
+- **Speaker**: turns spoken replies on or off for typed messages too.
+- **Ear**: turns "Hey Maja" on or off. While it's on, the status line says so, and the setting is remembered. The audio is only processed on the laptop and never saved.
+- **Folder**: opens the documents folder. Put PDFs, .txt or .md files there and type `update documents`.
 - **Camera**: turns the webcam on with a live preview. While it's on, the next message is about the picture, for example "What am I holding?". Photos are never saved.
 - **Phone**: starts a small web server and shows a QR code. Scan it with a phone on the same Wi-Fi. The link contains a secret key and the server refuses requests without it. It's plain HTTP, so only use it on a network you trust.
 
@@ -86,8 +95,9 @@ Things to try:
 - `briefing` (the daily overview, also shown automatically the first time Maja runs each day after 5 am)
 - `show tasks`, `what do you remember?`, `new chat`, `help`
 - `start with windows` / `stop starting with windows`
+- `voice` to list the installed voices, `voice amy` to switch
 
-Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition) and `MAJA_CAMERA` (camera number).
+Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition), `MAJA_VOICE` (default voice) and `MAJA_CAMERA` (camera number).
 
 ## Tests
 
