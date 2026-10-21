@@ -2,6 +2,7 @@ import math
 import re
 import tempfile
 import threading
+import types
 import unittest
 import zlib
 from datetime import datetime, timedelta
@@ -11,7 +12,8 @@ from unittest import mock
 from brain import BrainError
 from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
-from maja import Maja
+from cloud import CLOUD_AVAILABLE, CloudBrain
+from maja import Maja, cloud_mode
 from server import SERVER_AVAILABLE, create_app
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
                    text_for_speech)
@@ -449,6 +451,93 @@ class VoiceTests(unittest.TestCase):
         # One piece: the short pause inside it doesn't split it, and the click is ignored.
         self.assertEqual(len(pieces), 1)
         self.assertGreater(len(pieces[0]) / rate, 1.8)
+
+
+class FakeStream:
+    """Stands in for client.beta.messages.stream(...)."""
+
+    def __init__(self, pieces, usage, stop_reason="end_turn"):
+        self.text_stream = iter(pieces)
+        self.final = types.SimpleNamespace(usage=usage, stop_reason=stop_reason, content=[])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self.final
+
+
+class CloudTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.maja = Maja(Path(self.temporary.name) / "data.json", FakeBrain("Local answer."))
+        self.cloud = CloudBrain(self.maja)
+        self.requests = []
+        usage = types.SimpleNamespace(input_tokens=5000, output_tokens=1000,
+                                      server_tool_use=types.SimpleNamespace(web_search_requests=2))
+
+        def stream(**request):
+            self.requests.append(request)
+            return FakeStream(["Claude ", "says hi."], usage)
+
+        self.cloud._client = types.SimpleNamespace(
+            beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream)))
+        self.maja.cloud = self.cloud
+        self.env = mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.temporary.cleanup()
+
+    def test_only_explicit_prefixes_go_to_the_cloud(self):
+        self.assertEqual(cloud_mode("think: why is the sky blue?"), ("cloud", "why is the sky blue?"))
+        self.assertEqual(cloud_mode("Think harder, plan my thesis"), ("cloud", "plan my thesis"))
+        self.assertEqual(cloud_mode("search: weather in Gothenburg"), ("web", "weather in Gothenburg"))
+        self.assertEqual(cloud_mode("Search the web for cheap flights"), ("web", "cheap flights"))
+        for message in ["Think about my plan", "I think so", "search for my keys", "thinking: hm"]:
+            with self.subTest(message=message):
+                self.assertEqual(cloud_mode(message), (None, message))
+
+    @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
+    def test_think_uses_claude_and_shows_the_cost(self):
+        pieces = []
+        answer = self.maja.reply("think: explain Amdahl's law", on_text=pieces.append)
+        self.assertEqual(pieces, ["Claude ", "says hi."])
+        # 5000 input tokens at $4/M + 1000 output at $20/M + 2 searches at $0.01 = $0.06.
+        self.assertTrue(answer.endswith("☁️ Answered with Claude: $0.060 ($0.06 of $5.00 this month)"))
+        request = self.requests[0]
+        self.assertEqual(request["model"], "claude-opus-5-5")
+        self.assertEqual(request["messages"][-1], {"role": "user", "content": "explain Amdahl's law"})
+        self.assertIn("You are Maja", request["system"])
+        self.assertEqual(request["tools"], [])
+        self.assertEqual(request["fallbacks"], "default")
+
+    @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
+    def test_search_turns_on_web_search(self):
+        self.maja.reply("search: news about Chalmers")
+        self.assertEqual(self.requests[0]["tools"][0]["type"], "web_search_20260209")
+
+    @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
+    def test_budget_stops_cloud_use(self):
+        self.assertIn("$1.00 per month", self.maja.reply("cloud budget 1"))
+        self.maja.change_setting("cloud_spend", {f"{datetime.now():%Y-%m}": 1.0})
+        answer = self.maja.reply("think: anything")
+        self.assertIn("budget of $1.00 is used up", answer)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.maja.reply("normal question"), "Local answer.")
+
+    def test_plain_messages_never_use_the_cloud(self):
+        self.maja.reply("What's a good breakfast?")
+        self.assertEqual(self.requests, [])
+
+    @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
+    def test_missing_key_is_explained(self):
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}):
+            self.assertIn("needs a Claude API key", self.maja.reply("think: hi"))
 
 
 class PhotoTests(unittest.TestCase):

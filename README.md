@@ -21,6 +21,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Look at what I hold up to the webcam (Qwen2.5-VL vision model)
 - Chat from my phone over home Wi-Fi
 - Start with Windows, so reminders work all day
+- Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
 
 ## How it works
 
@@ -75,6 +76,12 @@ Typing works without any extra packages. The first reply can take up to a minute
 
 `py main.py --demo` starts Maja with a separate empty memory and the sample files in `demo_documents/`. I use it for screenshots so my own data doesn't show.
 
+## Cloud brain (optional)
+
+The local model is fine for everyday things but too small for hard questions. Messages that start with `think:` (or the brain button) go to Claude instead, and `search:` lets Claude search the web first. Everything else stays on the laptop. What gets sent is the question, the recent chat and Maja's instructions, which include my notes, open tasks and any matching document excerpts.
+
+Setup: create an API key in the [Claude Console](https://console.anthropic.com/) and save it as a Windows environment variable called `ANTHROPIC_API_KEY`, then restart Maja. It uses Claude Opus 5.5 (`MAJA_CLOUD_MODEL` changes it). Every answer shows what it cost, and Maja stops using Claude when the monthly budget is reached: $5 by default, `cloud budget 10` changes it, `cloud budget` shows what's been spent.
+
 ## Using it
 
 The buttons next to the text box:
@@ -96,6 +103,7 @@ Things to try:
 - `show tasks`, `what do you remember?`, `new chat`, `help`
 - `start with windows` / `stop starting with windows`
 - `voice` to list the installed voices, `voice amy` to switch
+- `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`
 
 Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition), `MAJA_VOICE` (default voice) and `MAJA_CAMERA` (camera number).
 

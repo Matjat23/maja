@@ -11,6 +11,7 @@ from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
 from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
+from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
 from reminders import describe_due, notify
@@ -58,6 +59,8 @@ def main():
         except LibraryError:
             library = None  # Maja explains how to install it when Matty asks about documents.
         maja = Maja(DATA / "maja_data.json", brain, library)
+        if CLOUD_AVAILABLE:
+            maja.cloud = CloudBrain(maja)  # Only used for "think:" and "search:" messages.
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()
@@ -485,6 +488,19 @@ def main():
     phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
     phone_button.pack(side="left", padx=(8, 0), ipady=3)
+
+    # --- Think harder: the brain button sends the next message to Claude --------------------
+    def think_harder():
+        # It only adds "think: " in front, so Matty sees before sending that it goes online.
+        text = entry.get()
+        if not text.lower().startswith("think:"):
+            entry.insert(0, "think: ")
+        entry.focus_set()
+        entry.icursor("end")
+
+    if maja.cloud is not None:
+        tk.Button(row, text="🧠", command=think_harder, bg=PANEL, fg=WHITE,
+                  font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
 
     # --- Reminders ---------------------------------------------------------------------
     def check_reminders():

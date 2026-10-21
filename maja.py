@@ -1,6 +1,7 @@
 """Local command and memory layer for the Maja prototype."""
 
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -74,6 +75,24 @@ def task_label(task):
     return task["text"]
 
 
+# Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
+# ordinary sentence like "Think about it" never costs money by accident.
+CLOUD_PREFIX = re.compile(
+    r"^\s*(?:(think harder|search the web for)\b[\s,:.-]*|(think|search)\s*:\s*)(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def cloud_mode(message):
+    """'think: why is the sky blue?' -> ('cloud', 'why is the sky blue?').
+    Plain messages -> (None, message), so they stay on this computer."""
+    match = CLOUD_PREFIX.match(message)
+    if not match:
+        return None, message
+    word = (match.group(1) or match.group(2)).lower()
+    return ("web" if word.startswith("search") else "cloud"), match.group(3).strip()
+
+
 def describe_update(report):
     """A short, friendly summary of Library.update()."""
     lines = [f"📄 Read: {name}" for name in report["added"]]
@@ -84,12 +103,14 @@ def describe_update(report):
 
 
 class Maja:
-    def __init__(self, data_file: Path, brain=None, library=None):
+    def __init__(self, data_file: Path, brain=None, library=None, cloud=None):
         self.data_file = Path(data_file)
         self.data = self._load()
         self.brain = brain
         # Matty's documents (see library.py). None when that feature isn't installed.
         self.library = library
+        # Claude, for "think:" and "search:" questions (see cloud.py). Created by the window.
+        self.cloud = cloud
         # The conversation is stored with the notes, so it survives a restart.
         self.history = self.data["history"]
 
@@ -177,7 +198,9 @@ class Maja:
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
                     "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
-                    "'show documents', 'update documents', 'briefing', or 'start with windows'. Put PDFs and notes in my "
+                    "'show documents', 'update documents', 'briefing', 'start with windows', "
+                    "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
+                    "the web) or 'cloud budget'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
@@ -237,10 +260,29 @@ class Maja:
             return f"Your computer's local time is {datetime.now():%H:%M}."
         if lower in {"briefing", "morning briefing", "my day", "what's my day?", "what's my day"}:
             return self.morning_briefing()
+        if lower.startswith("cloud budget"):
+            return self._cloud_budget(lower[len("cloud budget"):].strip(" $"))
         if self.brain is None:
             return ("I can't answer open-ended questions yet. Type 'help' to see what "
                     "this first version can do. We'll add an AI conversation engine next.")
-        return self._ask_brain(message, on_text)
+        mode, question = cloud_mode(message)
+        if mode and self.cloud is None:
+            return "Thinking harder isn't set up on this computer yet (see 'Cloud brain' in the README)."
+        return self._ask_brain(question, on_text, mode)
+
+    def _cloud_budget(self, amount):
+        if self.cloud is None:
+            return "Thinking harder isn't set up on this computer yet (see 'Cloud brain' in the README)."
+        if amount:
+            try:
+                budget = float(amount)
+                if budget < 0:
+                    raise ValueError
+            except ValueError:
+                return "Give the budget in dollars, for example 'cloud budget 10'."
+            self.change_setting("cloud_budget", budget)
+        return (f"Cloud budget: ${self.cloud.budget:.2f} per month. Spent this month: "
+                f"${self.cloud.spent_this_month():.2f}.")
 
     def briefing_due(self, now=None):
         """True once per day, from 5 in the morning, until the briefing has been shown."""
@@ -379,8 +421,11 @@ class Maja:
             "(speech is turned into text on this computer). You can speak your replies out "
             f"loud with a Windows voice. {speaking}. You can look through the webcam, but "
             f"only when Matty turns it on with 📷. {seeing}. You can answer questions from Matty's own documents "
-            "(📂). Matty can chat with you from their phone (📱). You run entirely on "
-            "Matty's own computer. Never say you are only text-based or can't speak."
+            "(📂). Matty can chat with you from their phone (📱). You run on Matty's own "
+            "computer. For hard questions Matty can start a message with 'think:' (or press "
+            "🧠) to ask a much stronger cloud model, Claude, and with 'search:' Claude also "
+            "searches the web. You can't browse the web yourself, so for current information "
+            "suggest 'search:'. Never say you are only text-based or can't speak."
         )
 
     def _search_documents(self, message):
@@ -426,7 +471,8 @@ class Maja:
             f"{documents}"
         )
 
-    def _ask_brain(self, message, on_text=None):
+    def _ask_brain(self, message, on_text=None, mode=None):
+        """mode None: the local model. "cloud": Claude. "web": Claude with web search."""
         saved_before = self._notes_and_tasks()
         try:
             receipts = self._remember(message)
@@ -441,18 +487,26 @@ class Maja:
             *self.history, user_message,
         ]
         try:
-            if on_text is None:
+            if mode is None and on_text is None:
                 answer = self.brain.chat(messages)
             else:
+                stream = (self.cloud.chat_stream(messages, web=mode == "web") if mode
+                          else self.brain.chat_stream(messages))
                 pieces = []
-                for piece in self.brain.chat_stream(messages):
+                for piece in stream:
                     pieces.append(piece)
-                    on_text(piece)
+                    if on_text is not None:
+                        on_text(piece)
                 answer = "".join(pieces).strip()
                 if not answer:
                     raise BrainError("The model sent an empty reply. Please try again.")
         except BrainError as error:
             return "\n".join([str(error), *receipts])
+        if mode:
+            spent = self.cloud.spent_this_month()
+            receipts.append(f"☁️ {'Searched the web and answered' if mode == 'web' else 'Answered'} "
+                            f"with Claude: ${self.cloud.last_cost:.3f} "
+                            f"(${spent:.2f} of ${self.cloud.budget:.2f} this month)")
         used = [hit for hit in excerpts
                 if hit["distance"] <= CLEAR_MATCH or source_label(hit["source"], hit["page"]) in answer]
         if used:
