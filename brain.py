@@ -29,6 +29,14 @@ class OllamaBrain:
             self.host = "http://" + self.host
         # The first reply can take a minute while the model loads into memory.
         self.timeout = timeout
+        # How much text the model can read at once (its "working memory"), in tokens.
+        # Ollama's default of about 4,000 silently dropped the older part of long chats.
+        # 8,000 still fits on an 8 GB graphics card; 16,000 spilled over to the processor.
+        # It must be the same in every request, or Ollama reloads the model each time.
+        self.context = int(os.getenv("MAJA_CONTEXT", "8192"))
+
+    def _options(self, **extra):
+        return {"num_ctx": self.context, **extra}
 
     def _post(self, path, payload):
         with self._errors(payload):
@@ -64,19 +72,23 @@ class OllamaBrain:
         except TimeoutError as error:
             raise BrainError("The model took too long to answer. Please try again.") from error
 
-    def _chat(self, messages, **extra):
+    def _chat(self, messages, options=None, **extra):
         data = self._post("/api/chat", {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "keep_alive": "30m",
+            "options": self._options(**(options or {})),
             **extra,
         })
         return (data.get("message") or {}).get("content", "").strip()
 
     def warm_up(self, model=None):
         """Load a model into memory so the first real reply is fast."""
-        self._post("/api/generate", {"model": model or self.model, "keep_alive": "30m"})
+        payload = {"model": model or self.model, "keep_alive": "30m"}
+        if payload["model"] == self.model:
+            payload["options"] = self._options()  # Load it with the right working memory.
+        self._post("/api/generate", payload)
 
     def chat(self, messages):
         """Send a list of {'role', 'content'} messages and return the reply text."""
@@ -87,7 +99,8 @@ class OllamaBrain:
 
     def chat_stream(self, messages):
         """Like chat(), but yields the reply in small pieces while the model writes it."""
-        payload = {"model": self.model, "messages": messages, "stream": True, "keep_alive": "30m"}
+        payload = {"model": self.model, "messages": messages, "stream": True, "keep_alive": "30m",
+                   "options": self._options()}
         with self._errors(payload):
             with self._open("/api/chat", payload) as response:
                 # Ollama sends one JSON object per line until "done" is true.
