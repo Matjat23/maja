@@ -11,6 +11,7 @@ from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
 from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
+from agenda import AGENDA_AVAILABLE, Agenda
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
@@ -61,6 +62,11 @@ def main():
         maja = Maja(DATA / "maja_data.json", brain, library)
         if CLOUD_AVAILABLE:
             maja.cloud = CloudBrain(maja)  # Only used for "think:" and "search:" messages.
+        if AGENDA_AVAILABLE:
+            maja.agenda = Agenda(maja, DATA / "calendar_cache.ics")
+            sample = HERE / "demo_documents" / "sample-calendar.ics"
+            if DEMO and not maja.agenda.url and sample.exists():
+                maja.change_setting("calendar_url", str(sample))
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()

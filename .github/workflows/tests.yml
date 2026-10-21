@@ -17,6 +17,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install document, phone and camera packages
-        run: python -m pip install chromadb pypdf fastapi uvicorn httpx opencv-python-headless anthropic
+        run: python -m pip install chromadb pypdf fastapi uvicorn httpx opencv-python-headless anthropic icalendar recurring-ical-events
       - name: Run unit tests
         run: python -m unittest -v

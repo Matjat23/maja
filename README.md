@@ -21,6 +21,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Look at what I hold up to the webcam (Qwen2.5-VL vision model)
 - Chat from my phone over home Wi-Fi
 - Start with Windows, so reminders work all day
+- Read my calendar (Outlook, Google or TimeEdit) and include today's events in the morning overview
 - Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
 
 ## How it works
@@ -42,6 +43,8 @@ main.py (window)          server.py (phone)
           |-- brain.py      Ollama: chat, JSON, embeddings, vision
           |-- library.py    documents: chunk, embed, search (ChromaDB)
           |-- reminders.py  due times and notifications
+          |-- agenda.py     calendar (ICS link, read-only)
+          |-- cloud.py      Claude for think: and search:
           |-- voice.py      speech to text and text to speech
           |-- camera.py     webcam
           |-- autostart.py  start with Windows
@@ -75,6 +78,18 @@ main.py (window)          server.py (phone)
 Typing works without any extra packages. The first reply can take up to a minute while the model loads, after that it's a few seconds. Notes, tasks and chat history are saved in `maja_data.json`, which is not committed to Git.
 
 `py main.py --demo` starts Maja with a separate empty memory and the sample files in `demo_documents/`. I use it for screenshots so my own data doesn't show.
+
+## Calendar (optional)
+
+Maja reads my calendar through its private ICS link. She can't change anything in it, and she doesn't need my password. Type `calendar` followed by the link to connect it, `calendar` to see the next 7 days and `calendar off` to disconnect.
+
+Getting the link:
+
+- Outlook: Settings, Calendar, Shared calendars, Publish a calendar. Pick the calendar and "Can view all details", click Publish and copy the ICS link.
+- Google Calendar: Settings, click the calendar, Integrate calendar, copy "Secret address in iCal format".
+- TimeEdit: open the schedule, click Subscribe and copy the link.
+
+The link works like a password for reading the calendar, so it's only stored in `maja_data.json`. Repeating events are expanded into individual dates, times are converted to the computer's time zone, and a copy is kept so it also works offline. In demo mode a sample calendar is connected automatically.
 
 ## Cloud brain (optional)
 

@@ -12,3 +12,6 @@ demo/
 
 # Piper voice files (about 60 MB each, downloaded separately)
 voices/
+
+# Downloaded copy of my calendar
+calendar_cache.ics

@@ -21,3 +21,7 @@ opencv-python>=4.8
 
 # Cloud brain for hard questions (think: / search:)
 anthropic>=2.0
+
+# Calendar
+icalendar>=6.0
+recurring-ical-events>=3.0

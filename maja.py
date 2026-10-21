@@ -7,6 +7,7 @@ from pathlib import Path
 
 import autostart
 from brain import BrainError
+from agenda import AgendaError, describe_event
 from library import CLEAR_MATCH, LibraryError, source_label
 from reminders import DUE_FORMAT, describe_due, guess_due, parse_due
 
@@ -103,7 +104,7 @@ def describe_update(report):
 
 
 class Maja:
-    def __init__(self, data_file: Path, brain=None, library=None, cloud=None):
+    def __init__(self, data_file: Path, brain=None, library=None, cloud=None, agenda=None):
         self.data_file = Path(data_file)
         self.data = self._load()
         self.brain = brain
@@ -111,6 +112,8 @@ class Maja:
         self.library = library
         # Claude, for "think:" and "search:" questions (see cloud.py). Created by the window.
         self.cloud = cloud
+        # Matty's calendar, read-only (see agenda.py).
+        self.agenda = agenda
         # The conversation is stored with the notes, so it survives a restart.
         self.history = self.data["history"]
 
@@ -198,7 +201,7 @@ class Maja:
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
                     "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
-                    "'show documents', 'update documents', 'briefing', 'start with windows', "
+                    "'show documents', 'update documents', 'briefing', 'calendar', 'start with windows', "
                     "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
                     "the web) or 'cloud budget'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
@@ -260,6 +263,10 @@ class Maja:
             return f"Your computer's local time is {datetime.now():%H:%M}."
         if lower in {"briefing", "morning briefing", "my day", "what's my day?", "what's my day"}:
             return self.morning_briefing()
+        command, _, argument = message.partition(" ")
+        if command.lower() == "calendar" or lower in {"my calendar", "what's on my calendar?",
+                                                      "what's on my calendar"}:
+            return self._calendar_command("" if command.lower() != "calendar" else argument.strip())
         if lower.startswith("cloud budget"):
             return self._cloud_budget(lower[len("cloud budget"):].strip(" $"))
         if self.brain is None:
@@ -269,6 +276,40 @@ class Maja:
         if mode and self.cloud is None:
             return "Thinking harder isn't set up on this computer yet (see 'Cloud brain' in the README)."
         return self._ask_brain(question, on_text, mode)
+
+    def _calendar_command(self, argument):
+        if self.agenda is None:
+            return ("Reading a calendar needs extra packages. In a terminal, run: "
+                    "py -m pip install -r requirements.txt, then restart me.")
+        try:
+            if argument.lower() == "off":
+                self.agenda.disconnect()
+                return "Okay, I've disconnected your calendar."
+            if argument:
+                self.agenda.connect(argument)
+                return "Your calendar is connected! 📅 Here's what's coming up:\n" + self._week_ahead()
+            return self._week_ahead()
+        except AgendaError as error:
+            return str(error)
+
+    def _week_ahead(self, now=None):
+        now = now or datetime.now()
+        events = self.agenda.events(now, now + timedelta(days=7))
+        if not events:
+            return "Nothing on your calendar for the next 7 days."
+        return "\n".join(f"📅 {describe_event(event, with_day=True)}" for event in events)
+
+    def _calendar_for_prompt(self):
+        """The next 7 days of the calendar, for Maja's instructions ('' if there's none)."""
+        if self.agenda is None or not self.agenda.url:
+            return ""
+        try:
+            now = datetime.now()
+            events = self.agenda.events(now, now + timedelta(days=7))[:25]
+        except AgendaError:
+            return ""
+        lines = "\n".join(f"- {describe_event(event, with_day=True)}" for event in events) or "(nothing)"
+        return f"\nMatty's calendar for the next 7 days:\n{lines}"
 
     def _cloud_budget(self, amount):
         if self.cloud is None:
@@ -307,7 +348,14 @@ class Maja:
         undated = [task for task in open_tasks if not task.get("due")]
 
         lines = [f"Today, {now:%A %d %B}:"]
-        lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today] or ["Nothing is due today."]
+        if self.agenda is not None and self.agenda.url:
+            try:
+                lines += [f"📅 {describe_event(event)}" for event in self.agenda.day(today)]
+            except AgendaError:
+                lines.append("📅 (I couldn't read your calendar right now.)")
+        lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today]
+        if len(lines) == 1:
+            lines.append("Nothing is due today.")
         if overdue:
             lines.append("Overdue:")
             lines += [f"⚠️ {task['text']} (was due {describe_due(task['due'])})" for task in overdue]
@@ -425,7 +473,8 @@ class Maja:
             "computer. For hard questions Matty can start a message with 'think:' (or press "
             "🧠) to ask a much stronger cloud model, Claude, and with 'search:' Claude also "
             "searches the web. You can't browse the web yourself, so for current information "
-            "suggest 'search:'. Never say you are only text-based or can't speak."
+            "suggest 'search:'. If Matty's calendar is connected, it's shown below and you can "
+            "read it, but not change it. Never say you are only text-based or can't speak."
         )
 
     def _search_documents(self, message):
@@ -465,7 +514,7 @@ class Maja:
             "a time get no reminder.\n\n"
             f"{self._abilities()}\n\n"
             f"Current local time: {datetime.now():%A %Y-%m-%d %H:%M}\n"
-            f"{saved_before}\n\n"
+            f"{saved_before}{self._calendar_for_prompt()}\n\n"
             "Just saved for the first time from Matty's latest message (Matty already "
             f"sees this, so don't repeat it, and it is new, not something said before):\n{just_saved}"
             f"{documents}"

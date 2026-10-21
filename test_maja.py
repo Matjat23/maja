@@ -5,13 +5,14 @@ import threading
 import types
 import unittest
 import zlib
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 from brain import BrainError
 from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
+from agenda import AGENDA_AVAILABLE, Agenda, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from maja import Maja, cloud_mode
 from server import SERVER_AVAILABLE, create_app
@@ -538,6 +539,54 @@ class CloudTests(unittest.TestCase):
     def test_missing_key_is_explained(self):
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}):
             self.assertIn("needs a Claude API key", self.maja.reply("think: hi"))
+
+
+@unittest.skipUnless(AGENDA_AVAILABLE, "needs icalendar and recurring-ical-events")
+class CalendarTests(unittest.TestCase):
+    SAMPLE = str(Path(__file__).with_name("demo_documents") / "sample-calendar.ics")
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        folder = Path(self.temporary.name)
+        self.brain = FakeBrain("Hi!")
+        self.maja = Maja(folder / "data.json", self.brain)
+        self.maja.agenda = Agenda(self.maja, folder / "cache.ics")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_weekly_events_are_expanded(self):
+        self.maja.agenda.connect(self.SAMPLE)
+        events = self.maja.agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 22))
+        self.assertEqual([describe_event(event, with_day=True) for event in events], [
+            "Mon 19 Oct, 10:00-12:00 Sample lecture: Parallel programming (Lecture hall HA2)",
+            "Tue 20 Oct, 17:30-18:30 Gym",
+            "Wed 21 Oct, 10:00-12:00 Sample lecture: Parallel programming (Lecture hall HA2)",
+        ])
+        self.assertEqual([describe_event(event) for event in self.maja.agenda.day(date(2026, 12, 18))],
+                         ["all day: Sample exam: Parallel programming"])
+
+    def test_calendar_commands(self):
+        self.assertIn("No calendar is connected", self.maja.reply("calendar"))
+        self.assertIn("doesn't look like a calendar link", self.maja.reply("calendar hello"))
+        self.assertIn("connected", self.maja.reply(f"calendar {self.SAMPLE}"))
+        self.assertEqual(self.maja.setting("calendar_url"), self.SAMPLE)
+        self.assertIn("disconnected", self.maja.reply("calendar off"))
+        self.assertIsNone(self.maja.setting("calendar_url"))
+
+    def test_briefing_and_replies_know_the_calendar(self):
+        self.maja.agenda.connect(self.SAMPLE)
+        text = self.maja.morning_briefing(datetime(2026, 10, 19, 7, 0))
+        self.assertIn("Today, Monday 19 October:\n📅 10:00-12:00 Sample lecture", text)
+        self.maja.reply("When is my next lecture?")
+        self.assertIn("Matty's calendar for the next 7 days", self.brain.calls[-1][0]["content"])
+
+    def test_offline_copy_is_used_when_the_link_stops_working(self):
+        self.maja.agenda.connect(self.SAMPLE)
+        self.maja.change_setting("calendar_url", "https://example.invalid/calendar.ics")
+        self.maja.agenda._calendar = None  # Force a new download, which fails.
+        events = self.maja.agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))
+        self.assertEqual(len(events), 1)
 
 
 class PhotoTests(unittest.TestCase):
