@@ -23,6 +23,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Start with Windows, so reminders work all day
 - Read my calendar (Outlook, Google or TimeEdit) and include today's events in the morning overview
 - Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
+- Work on bigger tasks in the background ("job: make me a study plan for the exam") and save a report
 
 ## How it works
 
@@ -45,6 +46,7 @@ main.py (window)          server.py (phone)
           |-- reminders.py  due times and notifications
           |-- agenda.py     calendar (ICS link, read-only)
           |-- cloud.py      Claude for think: and search:
+          |-- jobs.py       background jobs: plan, research, write, review
           |-- voice.py      speech to text and text to speech
           |-- camera.py     webcam
           |-- autostart.py  start with Windows
@@ -91,6 +93,12 @@ Getting the link:
 
 The link works like a password for reading the calendar, so it's only stored in `maja_data.json`. Repeating events are expanded into individual dates, times are converted to the computer's time zone, and a copy is kept so it also works offline. In demo mode a sample calendar is connected automatically.
 
+## Jobs
+
+A message that starts with `job:` (or `work on:`) is a bigger task that Maja works on in the background while I keep chatting. It goes through four roles, based on my separate agent team: a planner, a researcher (who also gets matching excerpts from my documents, and web search when Claude is used), a writer and a reviewer. If the reviewer finds problems, the writer fixes them once and the reviewer checks again, so it can't loop forever. When it's done, Maja shows the start of the result, sends a notification and saves a report with every step in `jobs/`. `open last job` opens it.
+
+Jobs use Claude when an API key and budget are available, and the local model otherwise. A local job with the sample lecture notes (a 5-day study plan) took about 75 seconds.
+
 ## Cloud brain (optional)
 
 The local model is fine for everyday things but too small for hard questions. Messages that start with `think:` (or the brain button) go to Claude instead, and `search:` lets Claude search the web first. Everything else stays on the laptop. What gets sent is the question, the recent chat and Maja's instructions, which include my notes, open tasks and any matching document excerpts.
@@ -119,6 +127,7 @@ Things to try:
 - `start with windows` / `stop starting with windows`
 - `voice` to list the installed voices, `voice amy` to switch
 - `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`
+- `job: make me a 5-day study plan for my exam using my lecture notes`, then `open last job`
 
 Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition), `MAJA_VOICE` (default voice) and `MAJA_CAMERA` (camera number).
 
@@ -135,4 +144,5 @@ The tests use fake models, so they don't need Ollama. The document, phone and ca
 - [x] Conversations with a local model, memory for notes and tasks
 - [x] Voice and reminders
 - [x] Camera, documents, phone access
+- [x] Cloud brain, calendar, background jobs
 - [ ] Robot version: design the case in CAD, then add sensors and motors

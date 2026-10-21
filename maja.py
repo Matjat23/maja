@@ -203,7 +203,8 @@ class Maja:
                     "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
                     "'show documents', 'update documents', 'briefing', 'calendar', 'start with windows', "
                     "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
-                    "the web) or 'cloud budget'. Put PDFs and notes in my "
+                    "the web), 'job: ...' (a bigger task I work on in the background) or "
+                    "'cloud budget'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
@@ -474,7 +475,10 @@ class Maja:
             "🧠) to ask a much stronger cloud model, Claude, and with 'search:' Claude also "
             "searches the web. You can't browse the web yourself, so for current information "
             "suggest 'search:'. If Matty's calendar is connected, it's shown below and you can "
-            "read it, but not change it. Never say you are only text-based or can't speak."
+            "read it, but not change it. For bigger tasks (a plan, a report, a study schedule) "
+            "Matty can start a message with 'job:'; you then work on it in the background with a "
+            "planner, researcher, writer and reviewer, and save a report. Never say you are only "
+            "text-based or can't speak."
         )
 
     def _search_documents(self, message):

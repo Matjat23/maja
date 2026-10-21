@@ -14,6 +14,7 @@ from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from agenda import AGENDA_AVAILABLE, Agenda, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
+from jobs import JobRunner
 from maja import Maja, cloud_mode
 from server import SERVER_AVAILABLE, create_app
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
@@ -587,6 +588,66 @@ class CalendarTests(unittest.TestCase):
         self.maja.agenda._calendar = None  # Force a new download, which fails.
         events = self.maja.agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))
         self.assertEqual(len(events), 1)
+
+
+class ScriptedBrain:
+    """Answers each role of a job with a scripted reply, in order."""
+
+    model = "fake-local"
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def chat(self, messages):
+        self.calls.append(messages)
+        return self.replies.pop(0)
+
+
+class JobTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def run_job(self, replies):
+        brain = ScriptedBrain(replies)
+        maja = Maja(self.folder / "data.json", brain)
+        runner = JobRunner(maja, self.folder / "jobs")
+        steps = []
+        summary = runner.run("Plan my study week", steps.append, now=datetime(2026, 10, 21, 14, 0))
+        return brain, runner, steps, summary
+
+    def test_a_good_draft_goes_through_four_roles(self):
+        brain, runner, steps, summary = self.run_job(
+            ["The plan", "The research", "The study week draft", "VERDICT: GOOD"])
+        self.assertEqual(steps, ["Planner is working...", "Researcher is working...",
+                                 "Writer is working...", "Reviewer is working..."])
+        self.assertIn("Plan:\nThe plan\n\nResearch:\nThe research", brain.calls[2][1]["content"])
+        self.assertIn("The study week draft", summary)
+        self.assertIn("The reviewer approved it.", summary)
+        report = runner.last_report()
+        self.assertEqual(report.name, "2026-10-21_1400_plan-my-study-week.md")
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("## Result\n\nThe study week draft", text)
+        self.assertIn("### Researcher\n\nThe research", text)
+
+    def test_review_problems_are_fixed_once(self):
+        brain, runner, steps, summary = self.run_job(
+            ["Plan", "Research", "Draft 1", "VERDICT: NEEDS WORK\n1. Add Sunday",
+             "Draft 2 with Sunday", "VERDICT: GOOD"])
+        self.assertEqual(len(brain.calls), 6)
+        self.assertIn("1. Add Sunday", brain.calls[4][1]["content"])
+        self.assertIn("Draft 2 with Sunday", summary)
+        self.assertIn("approved", summary)
+
+    def test_still_not_approved_after_one_fix(self):
+        brain, runner, steps, summary = self.run_job(
+            ["Plan", "Research", "Draft 1", "VERDICT: NEEDS WORK", "Draft 2", "VERDICT: NEEDS WORK"])
+        self.assertEqual(len(brain.calls), 6)  # It doesn't loop forever.
+        self.assertIn("still had remarks", summary)
 
 
 class PhotoTests(unittest.TestCase):

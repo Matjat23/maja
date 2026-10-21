@@ -15,3 +15,6 @@ voices/
 
 # Downloaded copy of my calendar
 calendar_cache.ics
+
+# Reports from jobs
+jobs/

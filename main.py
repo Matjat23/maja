@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import queue
+import re
 import shutil
 import sys
 import threading
@@ -12,6 +13,7 @@ from tkinter import messagebox
 from brain import BrainError, OllamaBrain
 from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
 from agenda import AGENDA_AVAILABLE, Agenda
+from jobs import JobRunner
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
@@ -34,6 +36,7 @@ RED = "#ff6b81"
 GREY = "#6f6480"
 SUBTITLE = "Your assistant, one step at a time"
 REMINDER_CHECK_MS = 15_000
+JOB_PREFIX = re.compile(r"^\s*(?:job|work on)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 HERE = Path(__file__).parent
 # Demo mode (py main.py --demo) uses a separate folder with its own notes, tasks, chat and
 # sample documents, so recordings never show Matty's real data.
@@ -201,6 +204,11 @@ def main():
         if command.lower() in {"voice", "voices"}:
             append("You", message)
             change_voice(name.strip())
+            return
+        job = JOB_PREFIX.match(message)
+        if job or message.lower() == "open last job":
+            append("You", message)
+            start_job(job.group(1).strip()) if job else open_last_job()
             return
         # With the camera on, the message is about what the camera sees right now.
         photo = photo_for_model(frame) if frame is not None else None
@@ -494,6 +502,34 @@ def main():
     phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
     phone_button.pack(side="left", padx=(8, 0), ipady=3)
+
+    # --- Jobs: "job: ..." runs a bigger task in the background (see jobs.py) ----------------
+    jobs = JobRunner(maja, DATA / "jobs")
+
+    def start_job(task):
+        who = "Claude" if jobs.uses_cloud() else "my local model"
+        maja_says(f"🛠️ Okay, I'm starting that job with {who}. It takes a few minutes; you can "
+                  "keep talking to me meanwhile, and I'll tell you when it's done.")
+
+        def step(text):
+            ui_calls.put(lambda: subtitle.configure(text=f"🛠️ Job: {text}"))
+
+        def done(summary):
+            def show():
+                subtitle.configure(text=idle_status())
+                maja_says(summary)
+            ui_calls.put(show)
+            in_background(lambda: notify("Maja 🛠️ Job done", task[:100]))
+
+        jobs.start(task, step, done)
+
+    def open_last_job():
+        report = jobs.last_report()
+        if report is None:
+            maja_says("I haven't finished any jobs yet. Start one with 'job:' and the task.")
+        else:
+            os.startfile(report)
+            maja_says(f"I opened {report.name}.")
 
     # --- Think harder: the brain button sends the next message to Claude --------------------
     def think_harder():

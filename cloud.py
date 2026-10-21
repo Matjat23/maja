@@ -65,6 +65,14 @@ class CloudBrain:
         spend[month] = round(spend.get(month, 0.0) + cost, 6)
         self.settings.change_setting("cloud_spend", spend)
 
+    @property
+    def usable(self):
+        """True when a question could be sent now (package, key and budget all fine)."""
+        return has_credentials() and self.spent_this_month() < self.budget
+
+    def chat(self, messages, web=False):
+        return "".join(self.chat_stream(messages, web=web)).strip()
+
     def chat_stream(self, messages, web=False):
         """Like OllamaBrain.chat_stream: yields the answer in pieces. With web=True,
         Claude may search the web (a few searches at most) before answering."""
