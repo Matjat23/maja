@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import autostart
+from actions import (CALENDAR_REQUEST, EMAIL_REQUEST, NO, YES, mailto_link, open_with_windows,
+                     plan_email, plan_event, write_event_file)
 from brain import BrainError
 from agenda import AgendaError, describe_event
 from library import CLEAR_MATCH, LibraryError, source_label
@@ -141,6 +143,10 @@ class Maja:
         self.memory = None
         # The conversation is stored with the notes, so it survives a restart.
         self.history = self.data["history"]
+        # A calendar event or email draft waiting for Matty's "yes" (see actions.py).
+        self.pending_action = None
+        self.open_in_app = open_with_windows
+        self.actions_folder = self.data_file.parent / "actions"
 
     def _load(self):
         if not self.data_file.exists():
@@ -271,6 +277,15 @@ class Maja:
         lower = message.lower()
         if not message:
             return "Type a message and I'll be here. 💜"
+        pending, self.pending_action = self.pending_action, None
+        if pending and lower.strip(" .!") in YES:
+            return self._do_action(pending)
+        if pending and lower.strip(" .!") in NO:
+            return "Okay, I won't do that."
+        # Anything else means Matty moved on, so the waiting action is dropped.
+        action = CALENDAR_REQUEST.match(message) or EMAIL_REQUEST.match(message)
+        if action:
+            return self._propose_action(action)
         if lower in {"hello", "hi", "hey"}:
             return "Hi Matty! I'm Maja. What would you like to work on today? 💜"
         if lower in {"help", "commands"}:
@@ -281,7 +296,8 @@ class Maja:
                     "'what time is it?', 'new chat', 'forget chats', "
                     "'show documents', 'update documents', 'briefing', 'calendar', 'start with windows', "
                     "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
-                    "the web), 'job: ...' (a bigger task I work on in the background) or "
+                    "the web), 'job: ...' (a bigger task I work on in the background), "
+                    "'add to calendar: ...', 'draft email: ...' or "
                     "'cloud budget'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
         if lower in {"forget chats", "forget our chats", "forget all chats"}:
@@ -380,6 +396,49 @@ class Maja:
         if mode and self.cloud is None:
             return "Thinking harder isn't set up on this computer yet (see 'Cloud brain' in the README)."
         return self._ask_brain(question, on_text, mode)
+
+    def _propose_action(self, match):
+        """Work out the event or email and ask Matty before doing anything."""
+        request = next(group for group in match.groups() if group).strip()
+        if self.brain is None:
+            return "I need my AI model for that."
+        try:
+            if match.re is CALENDAR_REQUEST:
+                event = plan_event(self.brain, request)
+                if event is None:
+                    return "When should it be? Try again with a day and time, like 'Friday at 3pm'."
+                self.pending_action = {"kind": "event", "event": event}
+                start = datetime.strptime(event["start"], DUE_FORMAT)
+                end = start + timedelta(minutes=event["duration_minutes"])
+                place = f" ({event['location']})" if event["location"] else ""
+                return (f"📅 Add this to your calendar?\n**{event['title']}**{place}\n"
+                        f"{start:%a %d %b}, {start:%H:%M}-{end:%H:%M}\n\n"
+                        "Type **yes** and I'll open it in your calendar app, where you click Save. "
+                        "Or type **no**.")
+            email = plan_email(self.brain, request)
+            if email is None:
+                return "I couldn't write that email. Tell me who it's for and what it should say."
+            self.pending_action = {"kind": "email", "email": email}
+            to = email["to"] or "(add the recipient in your email app)"
+            return (f"✉️ Here's a draft:\n**To:** {to}\n**Subject:** {email['subject']}\n\n"
+                    f"{email['body']}\n\n"
+                    "Type **yes** and I'll open it in your email app, where you can change it "
+                    "and press Send. Or type **no**.")
+        except BrainError as error:
+            return str(error)
+
+    def _do_action(self, action):
+        """Matty said yes: open the event or draft in Matty's own app. Nothing is sent."""
+        try:
+            if action["kind"] == "event":
+                self.open_in_app(write_event_file(action["event"], self.actions_folder))
+                return "📅 I opened it in your calendar app. Click **Save** there to add it."
+            self.open_in_app(mailto_link(action["email"]))
+            return ("✉️ I opened the draft in your email app. Check it and press **Send** when "
+                    "you're ready.")
+        except OSError:
+            what = "calendar" if action["kind"] == "event" else "email"
+            return f"I couldn't open your {what} app. Is one set up in Windows?"
 
     def _calendar_command(self, argument):
         if self.agenda is None:
@@ -585,7 +644,10 @@ class Maja:
             "read it, but not change it. For bigger tasks (a plan, a report, a study schedule) "
             "Matty can start a message with 'job:'; you then work on it in the background with a "
             "planner, researcher, writer and reviewer, and save a report. Never say you are only "
-            "text-based or can't speak. You have a long-term memory: related older "
+            "text-based or can't speak. Matty can type 'add to calendar: ...' or 'draft email: "
+            "...'; you then show a preview and, after Matty's yes, open it in their calendar or "
+            "email app, where Matty saves or sends it. You never send anything yourself. "
+            "You have a long-term memory: related older "
             "conversations are shown to you below when there are any, so you can say what "
             "you talked about before, but never make up past conversations."
         )

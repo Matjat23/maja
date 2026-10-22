@@ -21,3 +21,6 @@ jobs/
 
 # Full record of my conversations with Maja
 chat_archive.jsonl
+
+# Calendar event files Maja opens in the calendar app
+actions/

@@ -12,6 +12,7 @@ from unittest import mock
 from brain import BrainError
 from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
+from actions import mailto_link
 from agenda import AGENDA_AVAILABLE, Agenda, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from jobs import JobRunner
@@ -670,6 +671,57 @@ class SaveGuardTests(unittest.TestCase):
             maja = Maja(Path(folder) / "data.json", brain)
             maja.reply("Explain what a black hole is")
             self.assertEqual((maja.data["tasks"], brain.save_calls), ([], []))
+
+
+class ActionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.opened = []
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def maja_with(self, saves):
+        maja = Maja(Path(self.temporary.name) / "data.json", FakeBrain("Hi!", saves))
+        maja.open_in_app = self.opened.append
+        return maja
+
+    def test_calendar_event_needs_a_yes_and_is_opened_in_the_calendar_app(self):
+        maja = self.maja_with({"title": "Dentist", "start": "", "duration_minutes": 30, "location": "Main St 4"})
+        preview = maja.reply("add to calendar: dentist tomorrow at 3pm for 30 minutes at Main St 4")
+        tomorrow = datetime.now() + timedelta(days=1)
+        self.assertIn("**Dentist** (Main St 4)", preview)
+        self.assertIn(f"{tomorrow:%a %d %b}, 15:00-15:30", preview)
+        self.assertEqual(self.opened, [])  # Nothing happens before "yes".
+        self.assertIn("Click **Save**", maja.reply("yes"))
+        event = Path(self.opened[0]).read_text(encoding="utf-8")
+        self.assertIn(f"DTSTART:{tomorrow:%Y%m%d}T150000", event)
+        self.assertIn("SUMMARY:Dentist", event)
+        self.assertIn("LOCATION:Main St 4", event)
+        self.assertNotIn("Click", maja.reply("yes"))  # The yes is used up.
+
+    def test_email_draft_is_opened_only_after_yes(self):
+        maja = self.maja_with({"to": "anna@example.com", "subject": "Moving our meeting",
+                               "body": "Hi Anna,\nCan we move it to Friday?\nBest regards,\nMatty"})
+        preview = maja.reply("draft email: to anna@example.com, ask to move our meeting to Friday")
+        self.assertIn("**To:** anna@example.com", preview)
+        self.assertEqual(maja.reply("no"), "Okay, I won't do that.")
+        self.assertEqual(self.opened, [])
+        maja.reply("write an email to anna@example.com about the meeting")
+        maja.reply("yes")
+        self.assertTrue(self.opened[0].startswith("mailto:anna@example.com?subject=Moving%20our%20meeting&body=Hi%20Anna"))
+
+    def test_moving_on_drops_the_waiting_action(self):
+        maja = self.maja_with({"to": "Anna", "subject": "Hi", "body": "Hello!"})
+        maja.reply("draft email: say hi to Anna")
+        maja.reply("show tasks")
+        maja.reply("yes")
+        self.assertEqual(self.opened, [])
+
+    def test_long_emails_fit_in_a_mailto_link(self):
+        link = mailto_link({"to": "Anna", "subject": "Long", "body": "word " * 1000})
+        self.assertTrue(link.startswith("mailto:?subject=Long"))  # A name isn't an address.
+        self.assertLess(len(link), 2100)
 
 
 class MarkdownTests(unittest.TestCase):

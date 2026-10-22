@@ -24,6 +24,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Chat from my phone over home Wi-Fi
 - Start with Windows, so reminders work all day
 - Read my calendar (Outlook, Google or TimeEdit) and include today's events in the morning overview
+- Add events to my calendar and draft emails, but only after I say yes, and I still save or send them myself
 - Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
 - Work on bigger tasks in the background ("job: make me a study plan for the exam") and save a report
 
@@ -56,6 +57,7 @@ main.py (window)          server.py (phone)
           |-- cloud.py      Claude for think: and search:
           |-- jobs.py       background jobs: plan, research, write, review
           |-- memory.py     long-term memory of all conversations
+          |-- actions.py    calendar events and email drafts (after a yes)
           |-- markdown.py   formatting in the chat window
           |-- voice.py      speech to text and text to speech
           |-- camera.py     webcam
@@ -111,6 +113,10 @@ A job that starts with a repeat phrase, like `job: every Monday at 8, plan my we
 
 Jobs use Claude when an API key and budget are available, and the local model otherwise. A local job with the sample lecture notes (a 5-day study plan) took about 75 seconds.
 
+## Calendar events and email drafts
+
+`add to calendar: dentist Friday at 3pm for 45 minutes` and `draft email: to anna@example.com, ask if we can move our meeting` work the same way: Maja works out the event or writes the email, shows it, and asks first. Only after `yes` does she open it in my own app, the event as an `.ics` file in Outlook or Windows Calendar and the email as a `mailto:` draft in my mail app, and I still click Save or Send myself. Maja never sends anything. Any other message cancels the waiting action. The time of an event is read in Python first, like reminders.
+
 ## Cloud brain (optional)
 
 The local model is fine for everyday things but too small for hard questions. Messages that start with `think:` (or the brain button) go to Claude instead, and `search:` lets Claude search the web first. Everything else stays on the laptop. What gets sent is the question, the recent chat and Maja's instructions, which include my notes, open tasks and any matching document excerpts.
@@ -138,6 +144,7 @@ Things to try:
 - `show tasks`, `delete task 2`, `what do you remember?`, `new chat`, `help`
 - `Remind me to take my vitamins every day at 8`, then later `I took my vitamins`
 - `start with windows` / `stop starting with windows`
+- `add to calendar: study group Thursday at 5pm` / `draft email: to my teacher, ask for feedback on my report`
 - `voice` to list the installed voices, `voice amy` to switch
 - `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`
 - `job: make me a 5-day study plan for my exam using my lecture notes`, then `open last job`
@@ -158,4 +165,5 @@ The tests use fake models, so they don't need Ollama. The document, phone and ca
 - [x] Voice and reminders
 - [x] Camera, documents, phone access
 - [x] Cloud brain, calendar, background jobs
+- [x] Formatting, repeating reminders, scheduled jobs, long-term memory, calendar events and email drafts
 - [ ] Robot version: design the case in CAD, then add sensors and motors
