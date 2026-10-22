@@ -15,6 +15,7 @@ from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, previ
 from agenda import AGENDA_AVAILABLE, Agenda
 from jobs import JobRunner
 from markdown import markdown_runs
+from memory import Memory
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
@@ -68,6 +69,8 @@ def main():
         maja = Maja(DATA / "maja_data.json", brain, library)
         if CLOUD_AVAILABLE:
             maja.cloud = CloudBrain(maja)  # Only used for "think:" and "search:" messages.
+        if library is not None:
+            maja.memory = Memory(library, brain, DATA / "chat_archive.jsonl")
         if AGENDA_AVAILABLE:
             maja.agenda = Agenda(maja, DATA / "calendar_cache.ics")
             sample = HERE / "demo_documents" / "sample-calendar.ics"
@@ -646,7 +649,20 @@ def main():
             summary = describe_update(report)
             ui_calls.put(lambda: maja_says("I looked through your documents folder:\n" + summary))
 
+    def fill_memory_once():
+        # The first time, the recent chat (from before long-term memory existed) is saved.
+        if maja.memory is None or maja.memory.count() > 0:
+            return
+        history = list(maja.history)
+        for question, answer in zip(history, history[1:]):
+            if question["role"] == "user" and answer["role"] == "assistant":
+                try:
+                    maja.memory.remember(question["content"], answer["content"])
+                except Exception:
+                    return  # Not important enough to bother Matty about.
+
     in_background(warm_up)
+    in_background(fill_memory_once)
     if library is not None:
         in_background(read_documents)
     root.after(100, run_ui_calls)

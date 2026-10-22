@@ -14,6 +14,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Chat using Llama 3.1, running locally through [Ollama](https://ollama.com). Answers appear word by word while the model writes them.
 - Give me an overview of my day once every morning: what's due today, what's overdue and what's coming up this week
 - Save notes and tasks from normal conversation, and show what she saved
+- Remember every conversation, not just the last 20 messages, and bring up related older ones when they matter
 - Understand reminders like "Saturday at 6pm", "in 2 hours" or "by Friday", and show a Windows notification when they're due
 - Repeat reminders ("every day at 8", "every Monday", "every weekday", "every month") and run scheduled jobs ("job: every Monday at 8, plan my week")
 - Listen through the microphone (faster-whisper) and answer out loud with a natural neural voice (Piper), sentence by sentence while the reply is still being written
@@ -36,6 +37,10 @@ For "Hey Maja" there is no ready-made wake word model for her name, so I built i
 
 Repeating reminders work the same way: "every day", "every Monday", "every weekday" and "every month" are recognized in Python. When a repeating reminder goes off it moves on to its next time instead of being marked done, and times that were missed while Maja was closed are skipped rather than repeated.
 
+For long-term memory, every question and answer is saved in `chat_archive.jsonl` and as an embedding in its own ChromaDB collection. With each new message, the closest older conversations that aren't in the recent chat anymore are added to the model's instructions with their dates. I measured the cut-off on 8 stored conversations: questions about an old topic found the right one at a distance of 0.16 to 0.33, unrelated questions and small talk were 0.34 to 0.50, so the limit is 0.34. `forget chats` deletes all of it.
+
+Questions that only ask for information ("explain...", "what is...") skip the save step completely. The model sometimes turned them into tasks or notes, and a simple rule in code is more reliable than more examples in the prompt.
+
 Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
 
 For documents I use RAG. Files are split into chunks of about 1,000 characters, turned into embeddings with `nomic-embed-text` and stored in ChromaDB. For each question the closest chunks are given to the model. I measured the cut-off on test questions: questions about the documents had a cosine distance of 0.16 to 0.43 and normal chat 0.41 to 0.55, so chunks up to 0.45 are used and a source is only listed if it's a clear match (0.40) or the answer mentions it.
@@ -50,6 +55,8 @@ main.py (window)          server.py (phone)
           |-- agenda.py     calendar (ICS link, read-only)
           |-- cloud.py      Claude for think: and search:
           |-- jobs.py       background jobs: plan, research, write, review
+          |-- memory.py     long-term memory of all conversations
+          |-- markdown.py   formatting in the chat window
           |-- voice.py      speech to text and text to speech
           |-- camera.py     webcam
           |-- autostart.py  start with Windows

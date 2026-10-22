@@ -91,6 +91,10 @@ class Library:
         self._index_file = database_folder / "files.json"
         self._files = json.loads(self._index_file.read_text(encoding="utf-8")) if self._index_file.exists() else {}
 
+    def collection(self, name):
+        """Another collection in the same database (used for the chat memory)."""
+        return self._client.get_or_create_collection(name, metadata={"hnsw:space": "cosine"})
+
     def documents(self):
         return sorted(self._files)
 

@@ -16,7 +16,8 @@ from agenda import AGENDA_AVAILABLE, Agenda, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from jobs import JobRunner
 from markdown import markdown_runs, plain_text
-from maja import Maja, cloud_mode
+from memory import Memory
+from maja import Maja, cloud_mode, only_asks_for_information
 from server import SERVER_AVAILABLE, create_app
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
                    text_for_speech)
@@ -651,6 +652,26 @@ class JobTests(unittest.TestCase):
         self.assertIn("still had remarks", summary)
 
 
+class SaveGuardTests(unittest.TestCase):
+    def test_requests_for_information_save_nothing(self):
+        for message in ["Explain what a black hole is", "Give me a fun fact about space",
+                        "What is MPI?", "Can you tell me a joke?", "How do I cook rice?"]:
+            with self.subTest(message=message):
+                self.assertTrue(only_asks_for_information(message))
+        for message in ["Remind me to call mom", "I want to run a marathon", "Tell me how to... "
+                        "no wait, remember that I'm allergic to cats", "I paid the rent",
+                        "What a day, I need to finish my report"]:
+            with self.subTest(message=message):
+                self.assertFalse(only_asks_for_information(message))
+
+    def test_the_save_step_is_skipped_for_questions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            brain = FakeBrain("A black hole is...", {"new_tasks": [{"text": "Explain black holes", "due": ""}]})
+            maja = Maja(Path(folder) / "data.json", brain)
+            maja.reply("Explain what a black hole is")
+            self.assertEqual((maja.data["tasks"], brain.save_calls), ([], []))
+
+
 class MarkdownTests(unittest.TestCase):
     def test_common_formatting_becomes_styles(self):
         runs = markdown_runs("### Day 1\n* **Goal:** read *notes* and `MPI_Send`\n---")
@@ -739,6 +760,46 @@ class RepeatTests(unittest.TestCase):
         self.maja.reply("add task Old task")
         self.assertIn("Deleted: Old task", self.maja.reply("delete task 1"))
         self.assertIn("Use a number", self.maja.reply("delete task 5"))
+
+
+@unittest.skipUnless(LIBRARY_AVAILABLE, "needs chromadb (requirements.txt)")
+class MemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        folder = Path(self.temporary.name)
+        self.brain = FakeBrain("Noted.")
+        library = Library(folder / "documents", folder / "database", self.brain)
+        self.archive = folder / "archive.jsonl"
+        self.memory = Memory(library, self.brain, self.archive)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_old_conversations_are_found_by_meaning(self):
+        self.memory.remember("My knee hurts after running", "Rest it and ice it.",
+                             datetime(2026, 9, 1, 10, 0))
+        self.memory.remember("Recommend a science fiction book", "Project Hail Mary.",
+                             datetime(2026, 9, 2, 10, 0))
+        hits = self.memory.recall("knee still hurts after running")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["time"], "2026-09-01 10:00")
+        self.assertIn("Rest it and ice it.", hits[0]["text"])
+        self.assertEqual(self.memory.recall("pasta recipe tonight"), [])
+        # Conversations that are still in the recent chat aren't repeated.
+        self.assertEqual(self.memory.recall("knee hurts running", skip_questions={"My knee hurts after running"}), [])
+        self.assertEqual(len(self.archive.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_maja_uses_and_fills_the_memory(self):
+        maja = Maja(Path(self.temporary.name) / "data.json", self.brain)
+        maja.memory = self.memory
+        self.memory.remember("My thesis topic is warehouse robot path planning", "Great topic!",
+                             datetime(2026, 9, 1, 10, 0))
+        maja.reply("What was my thesis topic about warehouse robot path planning?")
+        self.assertIn("[2026-09-01 10:00]", self.brain.calls[-1][0]["content"])
+        self.assertEqual(self.memory.count(), 2)  # The new exchange was stored too.
+        self.assertIn("forgotten", maja.reply("forget chats"))
+        self.assertEqual(self.memory.count(), 0)
+        self.assertFalse(self.archive.exists())
 
 
 class PhotoTests(unittest.TestCase):

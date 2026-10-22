@@ -61,6 +61,7 @@ Examples:
 "How are you?" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
 "What should I eat before an exam?" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
 "Translate 'thank you' to French" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
+"Tell me a fun fact about whales" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": []}}
 "I love hiking on weekends" -> {{"notes": ["Matty loves hiking on weekends"], "new_tasks": [], "finished_task_numbers": []}}
 "I need to clean my room" -> {{"notes": [], "new_tasks": [{{"text": "Clean my room", "due": ""}}], "finished_task_numbers": []}}
 "I have to hand in my essay by Monday" -> {{"notes": [], "new_tasks": [{{"text": "Hand in my essay", "due": "{monday:%Y-%m-%d} 09:00"}}], "finished_task_numbers": []}}
@@ -68,6 +69,25 @@ Examples:
 "Remind me tomorrow at 7pm to call grandma" -> {{"notes": [], "new_tasks": [{{"text": "Call grandma", "due": "{tomorrow:%Y-%m-%d} 19:00"}}], "finished_task_numbers": []}}
 With open task "2. Pay rent": "I paid the rent" -> {{"notes": [], "new_tasks": [], "finished_task_numbers": [2]}}
 """
+
+
+# Requests for information never save anything, unless they also ask to be reminded or
+# say something to keep. This backs up the save step, which sometimes turned "Explain
+# what a black hole is" into a task.
+_REQUEST = re.compile(
+    r"^\s*(?:(?:can|could|would) you\s+|please\s+)?(?:explain|tell me|give me|describe|define|"
+    r"translate|summari[sz]e|list|show me|teach me|what|who|why|how|where|which|is|are|do|does)\b",
+    re.IGNORECASE,
+)
+_SAVE_SIGNAL = re.compile(
+    r"\b(?:remind|remember|don't let me forget|i need to|i have to|i must|i should|"
+    r"my goal|i want to|i'm going to|i am going to)\b",
+    re.IGNORECASE,
+)
+
+
+def only_asks_for_information(message):
+    return bool(_REQUEST.match(message)) and not _SAVE_SIGNAL.search(message)
 
 
 def task_label(task):
@@ -117,6 +137,8 @@ class Maja:
         self.cloud = cloud
         # Matty's calendar, read-only (see agenda.py).
         self.agenda = agenda
+        # Every conversation, searchable by meaning (see memory.py). Created by the window.
+        self.memory = None
         # The conversation is stored with the notes, so it survives a restart.
         self.history = self.data["history"]
 
@@ -256,18 +278,25 @@ class Maja:
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
                     "'show tasks', 'finish task 1', 'delete task 1', 'schedules', "
-                    "'what time is it?', 'new chat', "
+                    "'what time is it?', 'new chat', 'forget chats', "
                     "'show documents', 'update documents', 'briefing', 'calendar', 'start with windows', "
                     "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
                     "the web), 'job: ...' (a bigger task I work on in the background) or "
                     "'cloud budget'. Put PDFs and notes in my "
                     "documents folder and ask me about them.")
+        if lower in {"forget chats", "forget our chats", "forget all chats"}:
+            if self.memory is not None:
+                self.memory.forget_everything()
+            self.history.clear()
+            self._save()
+            return ("Done. I've forgotten all our past conversations. Your notes and tasks are "
+                    "still saved.")
         if lower in {"new chat", "reset chat"}:
             self.history.clear()
             self._save()
             return "Fresh start! Your notes and tasks are still saved. 💜"
         if lower.startswith("remember "):
-            note = message[9:].strip()
+            note = re.sub(r"^that\s+", "", message[9:].strip(), flags=re.IGNORECASE)
             if not note:
                 return "Tell me what you would like me to remember."
             self._add_note(note)
@@ -503,6 +532,8 @@ class Maja:
 
         Returns a receipt line (icon + 'Saved note: ...' etc.) for everything that was saved.
         """
+        if only_asks_for_information(message):
+            return []  # Also skips a model call, so questions are answered a bit faster.
         context = ""
         if self.history and self.history[-1]["role"] == "assistant":
             context = f"Maja's previous message (context only, store nothing from it):\n{self.history[-1]['content']}\n\n"
@@ -554,7 +585,9 @@ class Maja:
             "read it, but not change it. For bigger tasks (a plan, a report, a study schedule) "
             "Matty can start a message with 'job:'; you then work on it in the background with a "
             "planner, researcher, writer and reviewer, and save a report. Never say you are only "
-            "text-based or can't speak."
+            "text-based or can't speak. You have a long-term memory: related older "
+            "conversations are shown to you below when there are any, so you can say what "
+            "you talked about before, but never make up past conversations."
         )
 
     def _search_documents(self, message):
@@ -565,7 +598,36 @@ class Maja:
         except (BrainError, LibraryError):
             return []  # Maja still answers, just without the documents.
 
-    def _system_prompt(self, saved_before, receipts, excerpts):
+    @staticmethod
+    def _memories_for_prompt(memories):
+        if not memories:
+            return ""
+        return (
+            "\n\nEarlier conversations with Matty that may be related to the latest message "
+            "(they are older than the chat above). Use them only if they help, and you can "
+            "mention when they happened:\n\n"
+            + "\n\n".join(f"[{memory['time']}]\n{memory['text']}" for memory in memories)
+        )
+
+    def _recall(self, message):
+        """Older conversations related to this message ([] without a memory)."""
+        if self.memory is None:
+            return []
+        recent = {m["content"] for m in self.history if m["role"] == "user"}
+        try:
+            return self.memory.recall(message, skip_questions=recent)
+        except (BrainError, LibraryError):
+            return []
+
+    def _remember_exchange(self, question, answer):
+        if self.memory is None:
+            return
+        try:
+            self.memory.remember(question, answer)
+        except (BrainError, LibraryError, OSError):
+            pass  # Maja still answered; this conversation just won't be searchable.
+
+    def _system_prompt(self, saved_before, receipts, excerpts, memories=()):
         # Without the icon: the model can read the check mark as "completed".
         just_saved = "\n".join("- " + receipt.split(" ", 1)[1] for receipt in receipts) or "(nothing)"
         documents = ""
@@ -598,6 +660,7 @@ class Maja:
             "Just saved for the first time from Matty's latest message (Matty already "
             f"sees this, so don't repeat it, and it is new, not something said before):\n{just_saved}"
             f"{documents}"
+            f"{self._memories_for_prompt(memories)}"
         )
 
     def _ask_brain(self, message, on_text=None, mode=None):
@@ -610,9 +673,10 @@ class Maja:
             # fails too and shows Matty what to do.
             receipts = []
         excerpts = self._search_documents(message)
+        memories = self._recall(message)
         user_message = {"role": "user", "content": message}
         messages = [
-            {"role": "system", "content": self._system_prompt(saved_before, receipts, excerpts)},
+            {"role": "system", "content": self._system_prompt(saved_before, receipts, excerpts, memories)},
             *self.history, user_message,
         ]
         try:
@@ -642,6 +706,7 @@ class Maja:
             sources = dict.fromkeys(source_label(hit["source"], hit["page"]) for hit in used)
             receipts.append("📚 Sources: " + ", ".join(sources))
         text = "\n".join([answer, *receipts])
+        self._remember_exchange(message, answer)
         self.history += [user_message, {"role": "assistant", "content": answer}]
         del self.history[:-HISTORY_LIMIT]
         self._save()
