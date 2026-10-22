@@ -15,6 +15,7 @@ from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from agenda import AGENDA_AVAILABLE, Agenda, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from jobs import JobRunner
+from markdown import markdown_runs, plain_text
 from maja import Maja, cloud_mode
 from server import SERVER_AVAILABLE, create_app
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
@@ -648,6 +649,25 @@ class JobTests(unittest.TestCase):
             ["Plan", "Research", "Draft 1", "VERDICT: NEEDS WORK", "Draft 2", "VERDICT: NEEDS WORK"])
         self.assertEqual(len(brain.calls), 6)  # It doesn't loop forever.
         self.assertIn("still had remarks", summary)
+
+
+class MarkdownTests(unittest.TestCase):
+    def test_common_formatting_becomes_styles(self):
+        runs = markdown_runs("### Day 1\n* **Goal:** read *notes* and `MPI_Send`\n---")
+        self.assertEqual(runs, [
+            ("Day 1", ("heading",)), ("\n", ()),
+            ("• ", ()), ("Goal:", ("bold",)), (" read ", ()), ("notes", ("italic",)),
+            (" and ", ()), ("MPI_Send", ("code",)), ("\n", ()),
+            ("─" * 24, ()),
+        ])
+
+    def test_normal_text_is_left_alone(self):
+        text = "2 * 3 = 6 and the file my_notes_v2.md"
+        self.assertEqual(markdown_runs(text), [(text, ())])
+        self.assertEqual(plain_text("**Hi** Matty!\n- one\n  - two"), "Hi Matty!\n• one\n    • two")
+
+    def test_code_blocks_keep_their_text(self):
+        self.assertEqual(markdown_runs("```\nmpirun -n 4\n```"), [("mpirun -n 4\n", ("code",))])
 
 
 class PhotoTests(unittest.TestCase):

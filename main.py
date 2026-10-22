@@ -14,6 +14,7 @@ from brain import BrainError, OllamaBrain
 from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
 from agenda import AGENDA_AVAILABLE, Agenda
 from jobs import JobRunner
+from markdown import markdown_runs
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
@@ -103,13 +104,27 @@ def main():
                            font=("Segoe UI", 11), relief="flat", padx=14, pady=14, state="disabled")
     conversation.pack(fill="both", expand=True, padx=20, pady=(0, 12))
     conversation.tag_configure("maja", foreground=PINK)
+    # Styles for the Markdown in Maja's answers (see markdown.py).
+    conversation.tag_configure("bold", font=("Segoe UI", 11, "bold"))
+    conversation.tag_configure("italic", font=("Segoe UI", 11, "italic"))
+    conversation.tag_configure("heading", font=("Segoe UI", 13, "bold"), spacing1=6, spacing3=2)
+    conversation.tag_configure("code", font=("Consolas", 10), background=BG)
     entry = tk.Entry(row, bg=PANEL, fg=WHITE, insertbackground=WHITE,
                      font=("Segoe UI", 11), relief="flat")
     entry.pack(side="left", fill="x", expand=True, ipady=11)
 
+    def insert_formatted(text, tag=None):
+        """Insert text at the end, showing Maja's Markdown as real formatting."""
+        if tag != "maja":
+            conversation.insert("end", text, tag)
+            return
+        for piece, styles in markdown_runs(text):
+            conversation.insert("end", piece, ("maja", *styles))
+
     def append(speaker_name, text, tag=None):
         conversation.configure(state="normal")
-        conversation.insert("end", f"{speaker_name}: {text}\n\n", tag)
+        conversation.insert("end", f"{speaker_name}: ", tag)
+        insert_formatted(f"{text}\n\n", tag)
         conversation.configure(state="disabled")
         conversation.see("end")
 
@@ -153,7 +168,7 @@ def main():
         streaming = False
         conversation.configure(state="normal")
         conversation.delete("reply_start", "end-1c")
-        conversation.insert("end", f"{text}\n\n", "maja")
+        insert_formatted(f"{text}\n\n", "maja")
         conversation.configure(state="disabled")
         conversation.see("end")
         if speak_replies():

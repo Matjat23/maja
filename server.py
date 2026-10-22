@@ -12,6 +12,8 @@ import secrets
 import socket
 import threading
 
+from markdown import plain_text
+
 try:
     import uvicorn
     from fastapi import Depends, FastAPI, Header, HTTPException
@@ -57,12 +59,12 @@ def create_app(maja, lock, key, on_message=None):
             reply = maja.reply(message)
         if on_message and message:
             on_message(message, reply)
-        return {"reply": reply}
+        return {"reply": plain_text(reply)}  # The phone page shows plain text.
 
     @app.get("/api/history", dependencies=[Depends(check_key)])
     def history():
         with lock:
-            return {"messages": list(maja.history)}
+            return {"messages": [{**m, "content": plain_text(m["content"])} for m in maja.history]}
 
     return app
 
