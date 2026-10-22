@@ -20,7 +20,7 @@ from maja import Maja, cloud_mode
 from server import SERVER_AVAILABLE, create_app
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
                    text_for_speech)
-from reminders import guess_due, parse_due
+from reminders import guess_due, guess_repeat, next_due, parse_due
 
 
 class MajaStorageTests(unittest.TestCase):
@@ -668,6 +668,77 @@ class MarkdownTests(unittest.TestCase):
 
     def test_code_blocks_keep_their_text(self):
         self.assertEqual(markdown_runs("```\nmpirun -n 4\n```"), [("mpirun -n 4\n", ("code",))])
+
+
+class RepeatTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.maja = Maja(Path(self.temporary.name) / "data.json", FakeBrain("Sure!"))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_repeat_phrases(self):
+        cases = {"take vitamins every day at 8": "daily", "every morning": "daily",
+                 "water the plants every Monday": "weekly", "every week": "weekly",
+                 "stand-up every weekday at 9": "weekdays", "pay rent every month": "monthly",
+                 "call mom on Sunday": None, "everyone is here": None}
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(guess_repeat(message), expected)
+
+    def test_next_times(self):
+        friday = datetime(2026, 10, 23, 9, 0)
+        self.assertEqual(next_due(friday, "daily", friday), datetime(2026, 10, 24, 9, 0))
+        self.assertEqual(next_due(friday, "weekdays", friday), datetime(2026, 10, 26, 9, 0))
+        self.assertEqual(next_due(friday, "weekly", friday), datetime(2026, 10, 30, 9, 0))
+        self.assertEqual(next_due(datetime(2027, 1, 31, 9, 0), "monthly", datetime(2027, 1, 31, 9, 0)),
+                         datetime(2027, 2, 28, 9, 0))
+        # Missed times while Maja was closed are skipped, not repeated.
+        self.assertEqual(next_due(datetime(2026, 10, 1, 8, 0), "daily", datetime(2026, 10, 22, 12, 0)),
+                         datetime(2026, 10, 23, 8, 0))
+
+    def test_repeating_reminder_fires_and_moves_on(self):
+        self.maja.data["tasks"] = [{"text": "Vitamins", "done": False, "due": "2026-10-22 08:00",
+                                    "repeat": "daily"}]
+        fired = self.maja.due_reminders(datetime(2026, 10, 22, 8, 0))
+        self.assertEqual([task["text"] for task in fired], ["Vitamins"])
+        task = self.maja.data["tasks"][0]
+        self.assertEqual((task["due"], task["done"]), ("2026-10-23 08:00", False))
+        self.assertNotIn("reminded", task)
+        self.assertIn("(⏰ Fri 23 Oct, 08:00, every day)", self.maja.reply("show tasks"))
+
+    def test_finishing_a_repeating_task_moves_it_to_the_next_time(self):
+        today = datetime.now().replace(hour=23, minute=59, second=0, microsecond=0)
+        self.maja.data["tasks"] = [{"text": "Vitamins", "done": False,
+                                    "due": today.strftime("%Y-%m-%d %H:%M"), "repeat": "daily"}]
+        answer = self.maja.reply("finish task 1")
+        self.assertIn("Done for now! Vitamins", answer)
+        tomorrow = (today + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+        self.assertEqual(self.maja.data["tasks"][0]["due"], tomorrow)
+        # Already pointing at tomorrow (today's reminder went off): finishing again changes nothing.
+        self.maja.reply("finish task 1")
+        self.assertEqual(self.maja.data["tasks"][0]["due"], tomorrow)
+
+    def test_repeating_task_from_conversation(self):
+        self.maja.brain = FakeBrain("Okay!", {"new_tasks": [{"text": "Take vitamins", "due": ""}]})
+        answer = self.maja.reply("Remind me to take vitamins every day at 8")
+        task = self.maja.data["tasks"][0]
+        self.assertEqual((task["repeat"], task["due"][-5:]), ("daily", "08:00"))
+        self.assertIn("every day)", answer)
+
+    def test_schedules_and_delete_commands(self):
+        first = datetime(2026, 10, 26, 8, 0)
+        self.maja.add_schedule("plan my week", "weekly", first)
+        self.assertIn("1. 🔁 plan my week (every week, next: Mon 26 Oct, 08:00)", self.maja.reply("schedules"))
+        self.assertEqual(self.maja.due_schedules(datetime(2026, 10, 26, 7, 59)), [])
+        ready = self.maja.due_schedules(datetime(2026, 10, 26, 8, 0))
+        self.assertEqual([s["task"] for s in ready], ["plan my week"])
+        self.assertEqual(self.maja.data["schedules"][0]["next"], "2026-11-02 08:00")
+        self.assertIn("Deleted: plan my week", self.maja.reply("delete schedule 1"))
+        self.maja.reply("add task Old task")
+        self.assertIn("Deleted: Old task", self.maja.reply("delete task 1"))
+        self.assertIn("Use a number", self.maja.reply("delete task 5"))
 
 
 class PhotoTests(unittest.TestCase):

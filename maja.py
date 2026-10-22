@@ -9,7 +9,8 @@ import autostart
 from brain import BrainError
 from agenda import AgendaError, describe_event
 from library import CLEAR_MATCH, LibraryError, source_label
-from reminders import DUE_FORMAT, describe_due, guess_due, parse_due
+from reminders import (DUE_FORMAT, REPEAT_LABELS, REPEATS, describe_due, first_due, guess_due,
+                       guess_repeat, next_due, parse_due)
 
 
 # How many recent chat messages Maja keeps in mind (and saves) between conversations.
@@ -70,10 +71,12 @@ With open task "2. Pay rent": "I paid the rent" -> {{"notes": [], "new_tasks": [
 
 
 def task_label(task):
-    """'Call mom', or with a due date 'Call mom (alarm clock icon, Sat 10 Oct, 18:00)'."""
-    if task.get("due"):
-        return f"{task['text']} (⏰ {describe_due(task['due'])})"
-    return task["text"]
+    """'Call mom', or with a due date 'Call mom (alarm clock icon, Sat 10 Oct, 18:00)',
+    plus how often it repeats, if it does."""
+    if not task.get("due"):
+        return task["text"]
+    repeat = f", {REPEAT_LABELS[task['repeat']]}" if task.get("repeat") in REPEAT_LABELS else ""
+    return f"{task['text']} (⏰ {describe_due(task['due'])}{repeat})"
 
 
 # Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
@@ -151,8 +154,11 @@ class Maja:
         self._save()
         return True
 
-    def _add_task(self, text, due=None):
+    def _add_task(self, text, due=None, repeat=None):
         task = {"text": text, "done": False}
+        if repeat in REPEATS:
+            due = due or first_due(text, repeat)
+            task["repeat"] = repeat
         if due:
             task["due"] = due.strftime(DUE_FORMAT)
         self.data["tasks"].append(task)
@@ -162,26 +168,75 @@ class Maja:
     def due_reminders(self, now=None):
         """Return open tasks that are due and haven't been reminded about yet.
 
-        Each one is marked as reminded, so it only pops up once.
+        A one-time task is marked as reminded, so it only pops up once. A repeating task
+        moves on to its next time instead (missed times while Maja was closed are skipped).
         """
         now = now or datetime.now()
-        due = [task for task in self.data["tasks"]
+        due = [dict(task) for task in self.data["tasks"]
                if task.get("due") and not task["done"] and not task.get("reminded")
                and datetime.strptime(task["due"], DUE_FORMAT) <= now]
-        for task in due:
-            task["reminded"] = True
+        for task in self.data["tasks"]:
+            if task.get("due") and not task["done"] and not task.get("reminded") \
+                    and datetime.strptime(task["due"], DUE_FORMAT) <= now:
+                self._move_on(task, now) if task.get("repeat") else task.update(reminded=True)
         if due:
             self._save()
         return due
 
+    def _move_on(self, task, now=None):
+        """Set a repeating task to its next time after now."""
+        upcoming = next_due(datetime.strptime(task["due"], DUE_FORMAT), task["repeat"], now)
+        task["due"] = upcoming.strftime(DUE_FORMAT)
+
     def _finish_task(self, number):
-        """Mark task `number` (1-based) as done and return it, or None if it doesn't exist."""
+        """Mark task `number` (1-based) as done and return it, or None if it doesn't exist.
+        A repeating task is done for now and moves on to its next time."""
         if not 1 <= number <= len(self.data["tasks"]):
             return None
         task = self.data["tasks"][number - 1]
-        task["done"] = True
+        if task.get("repeat"):
+            now, due = datetime.now(), datetime.strptime(task["due"], DUE_FORMAT)
+            # Done today counts for today's time, even if it hasn't come yet. If today's
+            # reminder already went off, the task already points at the next time.
+            if due.date() <= now.date():
+                self._move_on(task, max(now, due))
+        else:
+            task["done"] = True
         self._save()
         return task
+
+    def _finished_text(self, task):
+        if task.get("repeat"):
+            return f"Done for now: {task['text']}. Next time: {describe_due(task['due'])}"
+        return f"Finished task: {task['text']}"
+
+    def _delete(self, kind, number):
+        items = self.data.get(kind, [])
+        if not 1 <= number <= len(items):
+            return None
+        removed = items.pop(number - 1)
+        self._save()
+        return removed
+
+    def add_schedule(self, task, repeat, first):
+        """A job that Maja runs on her own, for example every Monday at 8."""
+        schedule = {"task": task, "repeat": repeat, "next": first.strftime(DUE_FORMAT)}
+        self.data.setdefault("schedules", []).append(schedule)
+        self._save()
+        return schedule
+
+    def due_schedules(self, now=None):
+        """Scheduled jobs whose time has come. Each moves on to its next time."""
+        now = now or datetime.now()
+        ready = []
+        for schedule in self.data.get("schedules", []):
+            when = datetime.strptime(schedule["next"], DUE_FORMAT)
+            if when <= now:
+                ready.append(dict(schedule))
+                schedule["next"] = next_due(when, schedule["repeat"], now).strftime(DUE_FORMAT)
+        if ready:
+            self._save()
+        return ready
 
     def reply(self, message: str, on_text=None) -> str:
         """Answer a message and return the full reply.
@@ -200,7 +255,8 @@ class Maja:
             return ("Just talk to me normally, for example 'remind me to call mom' or "
                     "'I want to run 5 km this spring', and I'll save what matters. "
                     "Commands: 'remember ...', 'what do you remember?', 'add task ...', "
-                    "'show tasks', 'finish task 1', 'what time is it?', 'new chat', "
+                    "'show tasks', 'finish task 1', 'delete task 1', 'schedules', "
+                    "'what time is it?', 'new chat', "
                     "'show documents', 'update documents', 'briefing', 'calendar', 'start with windows', "
                     "'think: ...' (a harder question for Claude), 'search: ...' (Claude searches "
                     "the web), 'job: ...' (a bigger task I work on in the background) or "
@@ -237,7 +293,25 @@ class Maja:
                 task = None
             if task is None:
                 return "Use a task number from 'show tasks', for example 'finish task 1'."
+            if task.get("repeat"):
+                return f"Done for now! {task['text']} 🎉 Next time: {describe_due(task['due'])}"
             return f"Done! {task['text']} 🎉"
+        for kind, word in (("tasks", "task"), ("schedules", "schedule")):
+            if lower.startswith(f"delete {word} "):
+                try:
+                    removed = self._delete(kind, int(lower[len(f"delete {word} "):].strip()))
+                except ValueError:
+                    removed = None
+                if removed is None:
+                    return f"Use a number from 'show {kind}', for example 'delete {word} 1'."
+                return f"Deleted: {removed.get('text') or removed.get('task')}"
+        if lower in {"schedules", "show schedules", "my schedules"}:
+            schedules = self.data.get("schedules", [])
+            if not schedules:
+                return "No scheduled jobs. Start one like this: 'job: every Monday at 8, plan my week'."
+            return "Scheduled jobs:\n" + "\n".join(
+                f"{i}. 🔁 {s['task']} ({REPEAT_LABELS[s['repeat']]}, next: {describe_due(s['next'])})"
+                for i, s in enumerate(schedules, 1))
         if lower in {"show documents", "my documents", "update documents", "read my documents"}:
             if self.library is None:
                 return ("I can't read documents yet. In a terminal, run: "
@@ -445,16 +519,18 @@ class Maja:
                      if isinstance(task, dict) and str(task.get("text", "")).strip()]
         for new_task in new_tasks:
             due = parse_due(new_task.get("due", ""))
+            repeat = None
             if len(new_tasks) == 1:
                 # Plain-Python date reading is more reliable than the model when it finds a time.
-                due = guess_due(message) or due
-            task = self._add_task(str(new_task["text"]).strip(), due)
+                repeat = guess_repeat(message)
+                due = (first_due(message, repeat) if repeat else guess_due(message)) or due
+            task = self._add_task(str(new_task["text"]).strip(), due, repeat)
             receipts.append(f"✅ Added task: {task_label(task)}")
         for number in changes.get("finished_task_numbers") or []:
             tasks = self.data["tasks"]
             if isinstance(number, int) and 1 <= number <= len(tasks) and not tasks[number - 1]["done"]:
                 task = self._finish_task(number)
-                receipts.append(f"🎉 Finished task: {task['text']}")
+                receipts.append(f"🎉 {self._finished_text(task)}")
         return receipts
 
     def _abilities(self):

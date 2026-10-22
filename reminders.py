@@ -1,5 +1,6 @@
 """Due dates for tasks and Windows notifications for reminders."""
 
+import calendar
 import os
 import re
 import subprocess
@@ -70,6 +71,8 @@ def guess_due(message, now=None):
             time = (19, 0)
         elif re.search(r"\bafternoon\b", text):
             time = (14, 0)
+        elif re.search(r"\bmorning\b", text):
+            time = (8, 0)
         elif day is not None:
             time = (9, 0)
 
@@ -81,6 +84,60 @@ def guess_due(message, now=None):
             day += timedelta(days=1)
     due = datetime.combine(day, datetime.min.time()).replace(hour=time[0], minute=time[1])
     return due if due > now else None
+
+
+REPEATS = ["daily", "weekdays", "weekly", "monthly"]
+REPEAT_LABELS = {"daily": "every day", "weekdays": "every weekday", "weekly": "every week",
+                 "monthly": "every month"}
+_EVERY = r"\b(?:every|each)\s+"
+
+
+def guess_repeat(message):
+    """'every day at 8' -> 'daily', 'every Monday' -> 'weekly', otherwise None."""
+    text = message.lower()
+    if re.search(_EVERY + r"weekday|\bon weekdays\b|\bmonday (?:to|through|-) friday\b", text):
+        return "weekdays"
+    if re.search(_EVERY + r"(?:day|morning|evening|night|afternoon)\b|\bdaily\b", text):
+        return "daily"
+    if re.search(_EVERY + r"(?:week|" + "|".join(WEEKDAYS) + r")\b|\bweekly\b", text):
+        return "weekly"
+    if re.search(_EVERY + r"month\b|\bmonthly\b", text):
+        return "monthly"
+    return None
+
+
+def first_due(message, repeat, now=None):
+    """When a repeating reminder starts: the time in the message, or 9:00 next time."""
+    now = (now or datetime.now()).replace(second=0, microsecond=0)
+    due = guess_due(message, now)
+    if due is None:
+        due = now.replace(hour=9, minute=0)
+        if due <= now:
+            due += timedelta(days=1)
+    if repeat == "weekdays":
+        while due.weekday() >= 5:
+            due += timedelta(days=1)
+    return due
+
+
+def next_due(due, repeat, now=None):
+    """The next time a repeating reminder is due, after 'now'."""
+    now = now or datetime.now()
+    while due <= now:
+        if repeat == "daily":
+            due += timedelta(days=1)
+        elif repeat == "weekdays":
+            due += timedelta(days=3 if due.weekday() == 4 else 2 if due.weekday() == 5 else 1)
+        elif repeat == "weekly":
+            due += timedelta(days=7)
+        elif repeat == "monthly":
+            month = due.month % 12 + 1
+            year = due.year + (due.month == 12)
+            day = min(due.day, calendar.monthrange(year, month)[1])
+            due = due.replace(year=year, month=month, day=day)
+        else:
+            raise ValueError(f"Unknown repeat: {repeat}")
+    return due
 
 
 def describe_due(due_text):

@@ -15,6 +15,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Give me an overview of my day once every morning: what's due today, what's overdue and what's coming up this week
 - Save notes and tasks from normal conversation, and show what she saved
 - Understand reminders like "Saturday at 6pm", "in 2 hours" or "by Friday", and show a Windows notification when they're due
+- Repeat reminders ("every day at 8", "every Monday", "every weekday", "every month") and run scheduled jobs ("job: every Monday at 8, plan my week")
 - Listen through the microphone (faster-whisper) and answer out loud with a natural neural voice (Piper), sentence by sentence while the reply is still being written
 - Wake up hands-free when I say "Hey Maja", for example "Hey Maja, what's my day?"
 - Answer questions from my own documents and say which file and page the answer came from
@@ -32,6 +33,8 @@ Every message goes through two calls to the local model. The first one only deci
 The daily overview works the same way: the list of tasks is built by code, so nothing gets left out or made up, and the model only writes the short greeting above it.
 
 For "Hey Maja" there is no ready-made wake word model for her name, so I built it from the speech recognition Maja already has. A simple loudness check cuts the microphone sound into short pieces of speech (keeping the 0.4 seconds before each piece, otherwise the quiet start of "Hey" gets lost), and only those pieces are transcribed. If a piece starts with "Hey Maja" (or "Maya", "Maia", which is how Whisper often spells it), the rest is the message. Listening pauses while Maja is talking so she doesn't hear herself. I tested it by having other Piper voices say wake phrases and normal sentences into the same code: 34 of 36 were right and none of the normal sentences woke her.
+
+Repeating reminders work the same way: "every day", "every Monday", "every weekday" and "every month" are recognized in Python. When a repeating reminder goes off it moves on to its next time instead of being marked done, and times that were missed while Maja was closed are skipped rather than repeated.
 
 Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
 
@@ -97,6 +100,8 @@ The link works like a password for reading the calendar, so it's only stored in 
 
 A message that starts with `job:` (or `work on:`) is a bigger task that Maja works on in the background while I keep chatting. It goes through four roles, based on my separate agent team: a planner, a researcher (who also gets matching excerpts from my documents, and web search when Claude is used), a writer and a reviewer. If the reviewer finds problems, the writer fixes them once and the reviewer checks again, so it can't loop forever. When it's done, Maja shows the start of the result, sends a notification and saves a report with every step in `jobs/`. `open last job` opens it.
 
+A job that starts with a repeat phrase, like `job: every Monday at 8, plan my week`, is scheduled instead of run right away, and Maja starts it on her own at those times while she's running. `schedules` lists them and `delete schedule 1` removes one.
+
 Jobs use Claude when an API key and budget are available, and the local model otherwise. A local job with the sample lecture notes (a 5-day study plan) took about 75 seconds.
 
 ## Cloud brain (optional)
@@ -123,7 +128,8 @@ Things to try:
 - `I bought the shoes!`
 - `When is my exam?` (with the demo documents)
 - `briefing` (the daily overview, also shown automatically the first time Maja runs each day after 5 am)
-- `show tasks`, `what do you remember?`, `new chat`, `help`
+- `show tasks`, `delete task 2`, `what do you remember?`, `new chat`, `help`
+- `Remind me to take my vitamins every day at 8`, then later `I took my vitamins`
 - `start with windows` / `stop starting with windows`
 - `voice` to list the installed voices, `voice amy` to switch
 - `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`

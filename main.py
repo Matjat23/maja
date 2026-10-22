@@ -18,7 +18,7 @@ from markdown import markdown_runs
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from library import Library, LibraryError
 from maja import Maja, describe_update, task_label
-from reminders import describe_due, notify
+from reminders import DUE_FORMAT, REPEAT_LABELS, describe_due, first_due, guess_repeat, notify
 from server import SERVER_AVAILABLE, PhoneServer, new_key
 from voice import (NEURAL_VOICE_AVAILABLE, VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE,
                    Listener, Speaker, VoiceError, WakeListener, installed_voices)
@@ -38,6 +38,8 @@ GREY = "#6f6480"
 SUBTITLE = "Your assistant, one step at a time"
 REMINDER_CHECK_MS = 15_000
 JOB_PREFIX = re.compile(r"^\s*(?:job|work on)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
+# The "every Monday at 8," part at the start of a scheduled job, which isn't part of the task.
+SCHEDULE_WORDS = re.compile(r"^\s*(?:every|each)\b[^,:]*[,:]\s*", re.IGNORECASE)
 HERE = Path(__file__).parent
 # Demo mode (py main.py --demo) uses a separate folder with its own notes, tasks, chat and
 # sample documents, so recordings never show Matty's real data.
@@ -521,10 +523,24 @@ def main():
     # --- Jobs: "job: ..." runs a bigger task in the background (see jobs.py) ----------------
     jobs = JobRunner(maja, DATA / "jobs")
 
-    def start_job(task):
+    def start_job(task, scheduled=False):
+        repeat = None if scheduled else guess_repeat(task)
+        if repeat:
+            # "job: every Monday at 8, plan my week" is saved and run at those times.
+            first = first_due(task, repeat)
+            what = SCHEDULE_WORDS.sub("", task, count=1).strip() or task
+            maja.add_schedule(what, repeat, first)
+            maja_says(f"🔁 Scheduled: {what} ({REPEAT_LABELS[repeat]}, first time "
+                      f"{describe_due(first.strftime(DUE_FORMAT))}). I'll do it on my own as long "
+                      "as I'm running, so 'start with windows' helps. Type 'schedules' to see or "
+                      "delete it.")
+            return
         who = "Claude" if jobs.uses_cloud() else "my local model"
-        maja_says(f"🛠️ Okay, I'm starting that job with {who}. It takes a few minutes; you can "
-                  "keep talking to me meanwhile, and I'll tell you when it's done.")
+        if scheduled:
+            maja_says(f"🔁 Time for a scheduled job: {task}. I'm working on it with {who}.")
+        else:
+            maja_says(f"🛠️ Okay, I'm starting that job with {who}. It takes a few minutes; you can "
+                      "keep talking to me meanwhile, and I'll tell you when it's done.")
 
         def step(text):
             ui_calls.put(lambda: subtitle.configure(text=f"🛠️ Job: {text}"))
@@ -572,6 +588,14 @@ def main():
                 in_background(lambda text=task_label(task): notify("Maja ⏰ Reminder", text))
         if not busy and maja.briefing_due():
             show_briefing()
+        if not jobs.running:
+            # One job at a time; if several are due at once, the others wait for their next time.
+            for number, schedule in enumerate(maja.due_schedules()):
+                if number == 0:
+                    start_job(schedule["task"], scheduled=True)
+                else:
+                    maja_says(f"🔁 I skipped '{schedule['task']}' this time, because another "
+                              "scheduled job was running.")
         root.after(REMINDER_CHECK_MS, check_reminders)
 
     # --- Briefing: once a day (from 5 am), or when Matty types 'briefing' ----------------
