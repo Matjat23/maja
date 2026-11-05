@@ -19,7 +19,7 @@ from jobs import JobRunner
 from markdown import markdown_runs, plain_text
 from memory import Memory
 from maja import Maja, cloud_mode, only_asks_for_information
-from server import SERVER_AVAILABLE, create_app
+from server import SERVER_AVAILABLE, create_app, is_tailscale_address, tailscale_ip
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
                    text_for_speech)
 from reminders import guess_due, guess_repeat, next_due, parse_due
@@ -882,6 +882,24 @@ class PhotoTests(unittest.TestCase):
         decoded = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
         self.assertEqual(decoded.shape[:2], (432, 768))
         self.assertEqual(base64.b64decode(preview_png(frame))[:4], b"\x89PNG")
+
+
+class TailscaleTests(unittest.TestCase):
+    def test_only_tailscale_addresses_count(self):
+        self.assertTrue(is_tailscale_address("100.101.7.42"))
+        self.assertFalse(is_tailscale_address("192.168.1.151"))
+        self.assertFalse(is_tailscale_address("100.200.1.1"))  # Outside 100.64.0.0/10.
+        self.assertFalse(is_tailscale_address("not an address"))
+
+    def test_address_from_the_tailscale_command(self):
+        result = types.SimpleNamespace(stdout="100.101.7.42\n")
+        with mock.patch("server.subprocess.run", return_value=result):
+            self.assertEqual(tailscale_ip(), "100.101.7.42")
+
+    def test_no_tailscale_means_home_wifi_only(self):
+        with mock.patch("server.subprocess.run", side_effect=OSError), \
+                mock.patch("server.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("192.168.1.151", 0))]):
+            self.assertIsNone(tailscale_ip())
 
 
 class ChunkingTests(unittest.TestCase):

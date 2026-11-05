@@ -94,6 +94,10 @@ Typing works without any extra packages. The first reply can take up to a minute
 
 `py main.py --demo` starts Maja with a separate empty memory and the sample files in `demo_documents/`. I use it for screenshots so my own data doesn't show.
 
+## Phone outside home Wi-Fi (optional)
+
+Phone access works on the home Wi-Fi out of the box. To use Maja from anywhere, I install [Tailscale](https://tailscale.com) on the laptop and the phone and sign in with the same account. Tailscale makes a private, encrypted network between my own devices, so Maja is never open to the public internet. When Maja finds a Tailscale address (100.64.0.0/10) she puts that in the QR code instead, and the same link works at home and away. The phone's keyboard dictation works for talking on the phone page.
+
 ## Calendar (optional)
 
 Maja reads my calendar through its private ICS link. She can't change anything in it, and she doesn't need my password. Type `calendar` followed by the link to connect it, `calendar` to see the next 7 days and `calendar off` to disconnect.

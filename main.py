@@ -483,7 +483,7 @@ def main():
     def show_phone_message(message, reply):
         ui_calls.put(lambda: (append("You (📱)", message), append("Maja", reply, "maja")))
 
-    def show_qr(link):
+    def show_qr(link, anywhere=False):
         window = tk.Toplevel(root, bg=BG)
         window.title("Maja on your phone 📱")
         tk.Label(window, text="Scan with your phone's camera", font=("Segoe UI", 13, "bold"),
@@ -500,10 +500,13 @@ def main():
                     canvas.create_rectangle(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell,
                                             fill="black", width=0)
         canvas.pack(padx=20)
-        tk.Label(window, text="Your phone must be on the same Wi-Fi.\nIf Windows asks about the "
-                 "firewall, allow Python on private networks.\nThe link contains your secret key, "
-                 "so don't share it.", font=("Segoe UI", 9), bg=BG, fg=WHITE,
-                 justify="center").pack(padx=20, pady=12)
+        where = ("Works at home and away, through Tailscale\n(the phone needs the Tailscale app, "
+                 "signed in to the same account)." if anywhere else
+                 "Your phone must be on the same Wi-Fi.\nTo use Maja away from home too, install "
+                 "Tailscale on this computer and the phone (see README).")
+        tk.Label(window, text=f"{where}\nIf Windows asks about the firewall, allow Python on private "
+                 "networks.\nThe link contains your secret key, so don't share it.",
+                 font=("Segoe UI", 9), bg=BG, fg=WHITE, justify="center").pack(padx=20, pady=12)
 
     def toggle_phone():
         nonlocal phone
@@ -529,9 +532,11 @@ def main():
             maja_says(f"I couldn't start phone access: {error}")
             return
         phone_button.configure(bg=PINK)
-        maja_says("Phone access is on! 📱 Scan the QR code with your phone (same Wi-Fi). "
+        links = phone.links()
+        where = "from anywhere, through Tailscale" if links["anywhere"] else "on the same Wi-Fi"
+        maja_says(f"Phone access is on! 📱 Scan the QR code with your phone (works {where}). "
                   "Click 📱 again to turn it off.")
-        show_qr(phone.link())
+        show_qr(links["anywhere"] or links["home"], anywhere=bool(links["anywhere"]))
 
     phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)

@@ -8,8 +8,10 @@ read or change your notes. Phone access is off until Matty turns it on with the 
 The connection is plain HTTP, so only use it on a network you trust (like home Wi-Fi).
 """
 
+import ipaddress
 import secrets
 import socket
+import subprocess
 import threading
 
 from markdown import plain_text
@@ -24,6 +26,39 @@ except ImportError:
     SERVER_AVAILABLE = False
 
 PORT = 8765
+
+
+TAILSCALE_COMMANDS = ["tailscale", r"C:\Program Files\Tailscale\tailscale.exe"]
+
+
+def is_tailscale_address(address):
+    """Tailscale gives each device an address in 100.64.0.0/10."""
+    try:
+        return ipaddress.ip_address(address) in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        return False
+
+
+def tailscale_ip():
+    """This computer's address in Matty's private Tailscale network, or None.
+
+    With Tailscale on the computer and the phone (same account), the phone can reach Maja
+    from anywhere, encrypted, without opening anything to the internet.
+    """
+    for command in TAILSCALE_COMMANDS:
+        try:
+            result = subprocess.run([command, "ip", "-4"], capture_output=True, text=True, timeout=5,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in result.stdout.split():
+            if is_tailscale_address(line.strip()):
+                return line.strip()
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+    except OSError:
+        return None
+    return next((address for address in sorted(addresses) if is_tailscale_address(address)), None)
 
 
 def local_ip():
@@ -79,8 +114,13 @@ class PhoneServer:
     def running(self):
         return self._server is not None
 
-    def link(self):
-        return f"http://{local_ip()}:{PORT}/#key={self.key}"
+    def link(self, address=None):
+        return f"http://{address or local_ip()}:{PORT}/#key={self.key}"
+
+    def links(self):
+        """{'home': link on this Wi-Fi, 'anywhere': link through Tailscale or None}."""
+        anywhere = tailscale_ip()
+        return {"home": self.link(), "anywhere": self.link(anywhere) if anywhere else None}
 
     def start(self):
         config = uvicorn.Config(self._app, host="0.0.0.0", port=PORT, log_level="warning")
