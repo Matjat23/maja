@@ -132,6 +132,7 @@ The buttons next to the text box:
 - **Ear**: turns "Hey Maja" on or off. While it's on, the status line says so, and the setting is remembered. The audio is only processed on the laptop and never saved.
 - **Folder**: opens the documents folder. Put PDFs, .txt or .md files there and type `update documents`.
 - **Camera**: turns the webcam on with a live preview. While it's on, the next message is about the picture, for example "What am I holding?". Photos are never saved.
+- **Tasks**: shows or hides the task panel on the right, where open tasks and scheduled jobs can be ticked off or deleted with the mouse. It runs the same commands as typing them.
 - **Phone**: starts a small web server and shows a QR code. Scan it with a phone on the same Wi-Fi. The link contains a secret key and the server refuses requests without it. It's plain HTTP, so only use it on a network you trust.
 
 Things to try:

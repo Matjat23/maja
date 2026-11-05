@@ -1,6 +1,7 @@
 """Start Maja's desktop window with: python main.py"""
 
 from pathlib import Path
+import json
 import os
 import queue
 import re
@@ -91,8 +92,8 @@ def main():
 
     root = tk.Tk()
     root.title("Maja 💜")
-    root.geometry("720x620")
-    root.minsize(560, 420)
+    root.geometry("1000x660")
+    root.minsize(760, 440)
     root.configure(bg=BG)
 
     title = tk.Label(root, text="Maja  ✨", font=("Segoe UI", 24, "bold"), bg=BG, fg=PINK)
@@ -104,6 +105,13 @@ def main():
     # small window; the conversation takes whatever space is left.
     row = tk.Frame(root, bg=BG)
     row.pack(side="bottom", fill="x", padx=20, pady=(0, 20))
+
+    # The task panel on the right (filled by refresh_tasks below), packed before the
+    # conversation for the same reason.
+    task_panel = tk.Frame(root, bg=PANEL, width=270)
+    task_panel.pack_propagate(False)
+    if maja.setting("task_panel", True):
+        task_panel.pack(side="right", fill="y", padx=(0, 20), pady=(0, 12))
 
     conversation = tk.Text(root, wrap="word", bg=PANEL, fg=WHITE, insertbackground=WHITE,
                            font=("Segoe UI", 11), relief="flat", padx=14, pady=14, state="disabled")
@@ -248,7 +256,7 @@ def main():
                         answer = maja.reply(message, on_text=on_text)
             except OSError as error:
                 answer = f"I couldn't save that. Please check the folder permissions: {error}"
-            ui_calls.put(lambda: (set_busy(False), finish_reply(answer)))
+            ui_calls.put(lambda: (set_busy(False), finish_reply(answer), refresh_tasks()))
 
         in_background(think)
 
@@ -523,6 +531,72 @@ def main():
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)
     phone_button.pack(side="left", padx=(8, 0), ipady=3)
 
+    # --- Task panel: tick off or delete tasks with the mouse ------------------------------
+    shown_tasks = None  # What the panel shows now, so it's only rebuilt when that changes.
+    MAX_PANEL_TASKS = 12
+
+    def run_command(command):
+        # Clicking in the panel works like typing the command, so Maja confirms it in the chat.
+        entry.delete(0, "end")
+        entry.insert(0, command)
+        send()
+
+    def refresh_tasks(force=False):
+        nonlocal shown_tasks
+        tasks = [(number, task) for number, task in enumerate(maja.data["tasks"], 1) if not task["done"]]
+        schedules = list(enumerate(maja.data.get("schedules", []), 1))
+        snapshot = json.dumps([tasks, schedules], sort_keys=True, default=str)
+        if snapshot == shown_tasks and not force:
+            return
+        shown_tasks = snapshot
+        for child in task_panel.winfo_children():
+            child.destroy()
+        tk.Label(task_panel, text=f"📋 Tasks ({len(tasks)})", font=("Segoe UI", 12, "bold"),
+                 bg=PANEL, fg=PINK, anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+        if not tasks:
+            tk.Label(task_panel, text="No open tasks. Say something like 'remind me to call "
+                     "mom tomorrow at 5'.", font=("Segoe UI", 9), bg=PANEL, fg=WHITE,
+                     wraplength=230, justify="left", anchor="w").pack(fill="x", padx=12)
+        for number, task in tasks[:MAX_PANEL_TASKS]:
+            line = tk.Frame(task_panel, bg=PANEL)
+            line.pack(fill="x", padx=8, pady=2)
+            tk.Button(line, text="○", command=lambda n=number: run_command(f"finish task {n}"),
+                      bg=PANEL, fg=PINK, activebackground=BG, relief="flat", bd=0,
+                      font=("Segoe UI", 12), cursor="hand2").pack(side="left", anchor="n")
+            tk.Button(line, text="✕", command=lambda n=number: run_command(f"delete task {n}"),
+                      bg=PANEL, fg=GREY, activebackground=BG, relief="flat", bd=0,
+                      font=("Segoe UI", 9), cursor="hand2").pack(side="right", anchor="n")
+            tk.Label(line, text=task_label(task), font=("Segoe UI", 10), bg=PANEL, fg=WHITE,
+                     wraplength=180, justify="left", anchor="w").pack(side="left", fill="x", padx=(4, 0))
+        if len(tasks) > MAX_PANEL_TASKS:
+            tk.Label(task_panel, text=f"... and {len(tasks) - MAX_PANEL_TASKS} more ('show tasks')",
+                     font=("Segoe UI", 9), bg=PANEL, fg=GREY, anchor="w").pack(fill="x", padx=12)
+        if schedules:
+            tk.Label(task_panel, text="🔁 Scheduled jobs", font=("Segoe UI", 11, "bold"),
+                     bg=PANEL, fg=PINK, anchor="w").pack(fill="x", padx=12, pady=(14, 4))
+            for number, schedule in schedules:
+                line = tk.Frame(task_panel, bg=PANEL)
+                line.pack(fill="x", padx=8, pady=2)
+                tk.Button(line, text="✕", command=lambda n=number: run_command(f"delete schedule {n}"),
+                          bg=PANEL, fg=GREY, activebackground=BG, relief="flat", bd=0,
+                          font=("Segoe UI", 9), cursor="hand2").pack(side="right", anchor="n")
+                tk.Label(line, text=f"{schedule['task']}\n{REPEAT_LABELS[schedule['repeat']]}, "
+                         f"next {describe_due(schedule['next'])}", font=("Segoe UI", 9),
+                         bg=PANEL, fg=WHITE, wraplength=210, justify="left",
+                         anchor="w").pack(side="left", fill="x", padx=(6, 0))
+
+    def toggle_task_panel():
+        show = not task_panel.winfo_ismapped()
+        if show:
+            task_panel.pack(side="right", fill="y", padx=(0, 20), pady=(0, 12), before=conversation)
+            refresh_tasks(force=True)
+        else:
+            task_panel.pack_forget()
+        maja.change_setting("task_panel", show)
+
+    tk.Button(row, text="📋", command=toggle_task_panel, bg=PANEL, fg=WHITE,
+              font=("Segoe UI Emoji", 12), relief="flat", padx=10).pack(side="left", padx=(8, 0), ipady=3)
+
     # --- Jobs: "job: ..." runs a bigger task in the background (see jobs.py) ----------------
     jobs = JobRunner(maja, DATA / "jobs")
 
@@ -599,6 +673,8 @@ def main():
                 else:
                     maja_says(f"🔁 I skipped '{schedule['task']}' this time, because another "
                               "scheduled job was running.")
+        if task_panel.winfo_ismapped():
+            refresh_tasks()  # Reminders and scheduled jobs move tasks on.
         root.after(REMINDER_CHECK_MS, check_reminders)
 
     # --- Briefing: once a day (from 5 am), or when Matty types 'briefing' ----------------
@@ -667,6 +743,7 @@ def main():
         in_background(read_documents)
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
+    refresh_tasks(force=True)
     if maja.setting("wake", False):
         root.after(500, toggle_wake)  # It was on last time, so it stays on (button shows it).
 
