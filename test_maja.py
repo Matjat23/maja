@@ -309,6 +309,16 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/chat", json={"message": "hi there"},
                                           headers={"X-Maja-Key": "wrong"}).status_code, 401)
 
+    def test_face_page_and_state_for_a_robot_body(self):
+        from fastapi.testclient import TestClient
+        states = iter(["thinking", "nonsense"])
+        client = TestClient(create_app(self.maja, threading.Lock(), "secret-key", state=lambda: next(states)))
+        self.assertIn("Maja's face", client.get("/face").text)
+        self.assertEqual(client.get("/api/state").status_code, 401)
+        headers = {"X-Maja-Key": "secret-key"}
+        self.assertEqual(client.get("/api/state", headers=headers).json(), {"state": "thinking"})
+        self.assertEqual(client.get("/api/state", headers=headers).json(), {"state": "idle"})
+
     def test_chat_from_phone_reaches_maja_and_the_window(self):
         headers = {"X-Maja-Key": "secret-key"}
         response = self.client.post("/api/chat", json={"message": "Hello from my phone"}, headers=headers)

@@ -98,6 +98,10 @@ Typing works without any extra packages. The first reply can take up to a minute
 
 Phone access works on the home Wi-Fi out of the box. To use Maja from anywhere, I install [Tailscale](https://tailscale.com) on the laptop and the phone and sign in with the same account. Tailscale makes a private, encrypted network between my own devices, so Maja is never open to the public internet. When Maja finds a Tailscale address (100.64.0.0/10) she puts that in the QR code instead, and the same link works at home and away. The phone's keyboard dictation works for talking on the phone page.
 
+## Face and robot body (first step)
+
+The plan is that Maja's brain stays on the laptop and a small robot on my desk is her body. The first part of that body is her face: when phone access is on, Maja also shows a link to `/face`, a full-screen page for an old phone or tablet with eyes and a mouth that change with what she's doing (idle, listening, thinking, speaking). The page asks `GET /api/state` a few times a second, with the same secret key as the chat page. A future robot board (for example an ESP32 moving two servos) can use the same endpoint to nod or turn its head, which keeps all the hardware outside Maja's code.
+
 ## Calendar (optional)
 
 Maja reads my calendar through its private ICS link. She can't change anything in it, and she doesn't need my password. Type `calendar` followed by the link to connect it, `calendar` to see the next 7 days and `calendar off` to disconnect.
@@ -172,4 +176,5 @@ The tests use fake models, so they don't need Ollama. The document, phone and ca
 - [x] Camera, documents, phone access
 - [x] Cloud brain, calendar, background jobs
 - [x] Formatting, repeating reminders, scheduled jobs, long-term memory, calendar events and email drafts
-- [ ] Robot version: design the case in CAD, then add sensors and motors
+- [x] Task panel, desktop app, phone through Tailscale, face page and state endpoint for a robot
+- [ ] Robot version: a moving head (ESP32 + servos), then a printed case designed in CAD

@@ -524,7 +524,7 @@ def main():
         if not key:
             key = new_key()
             maja.change_setting("phone_key", key)
-        phone = PhoneServer(maja, maja_lock, key, show_phone_message)
+        phone = PhoneServer(maja, maja_lock, key, show_phone_message, state=current_state)
         try:
             phone.start()
         except OSError as error:
@@ -537,6 +537,18 @@ def main():
         maja_says(f"Phone access is on! 📱 Scan the QR code with your phone (works {where}). "
                   "Click 📱 again to turn it off.")
         show_qr(links["anywhere"] or links["home"], anywhere=bool(links["anywhere"]))
+        maja_says("🤖 Maja's face for an old phone or tablet (open it there, then tap for full "
+                  f"screen): {phone.face_link()}")
+
+    def current_state():
+        """What Maja is doing, for her face page and a future robot body."""
+        if listening or (wake is not None and wake.awake):
+            return "listening"
+        if speaker.speaking:
+            return "speaking"
+        if busy:
+            return "thinking"
+        return "idle"
 
     phone_button = tk.Button(row, text="📱", command=toggle_phone, bg=PANEL, fg=WHITE,
                              font=("Segoe UI Emoji", 12), relief="flat", padx=10)

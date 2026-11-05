@@ -71,9 +71,13 @@ def local_ip():
             return "127.0.0.1"
 
 
-def create_app(maja, lock, key, on_message=None):
+STATES = ("idle", "listening", "thinking", "speaking")
+
+
+def create_app(maja, lock, key, on_message=None, state=lambda: "idle"):
     """The web app. `lock` keeps the phone and the desktop window from changing Maja at
-    the same time; `on_message(message, reply)` lets the window show phone chats."""
+    the same time; `on_message(message, reply)` lets the window show phone chats;
+    `state()` says what Maja is doing, for her face and, later, a robot body."""
     app = FastAPI(title="Maja", docs_url=None, redoc_url=None, openapi_url=None)
 
     def check_key(x_maja_key: str = Header(default="")):
@@ -101,14 +105,28 @@ def create_app(maja, lock, key, on_message=None):
         with lock:
             return {"messages": [{**m, "content": plain_text(m["content"])} for m in maja.history]}
 
+    @app.get("/face", response_class=HTMLResponse)
+    def face():
+        return FACE_PAGE  # Also contains no personal data.
+
+    @app.get("/api/state", dependencies=[Depends(check_key)])
+    def current_state():
+        # The hardware interface: the face page and a future robot body ask this a few times
+        # a second and show it (eyes, mouth, a nod, an LED). It never blocks on the lock.
+        value = state()
+        return {"state": value if value in STATES else "idle"}
+
     return app
 
 
 class PhoneServer:
-    def __init__(self, maja, lock, key, on_message=None):
+    def __init__(self, maja, lock, key, on_message=None, state=lambda: "idle"):
         self.key = key
-        self._app = create_app(maja, lock, key, on_message)
+        self._app = create_app(maja, lock, key, on_message, state)
         self._server = None
+
+    def face_link(self, address=None):
+        return f"http://{address or tailscale_ip() or local_ip()}:{PORT}/face#key={self.key}"
 
     @property
     def running(self):
@@ -135,6 +153,96 @@ class PhoneServer:
 
 def new_key():
     return secrets.token_urlsafe(18)
+
+
+FACE_PAGE = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1b1525"><title>Maja's face</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1525; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #note { position: fixed; bottom: 12px; width: 100%; text-align: center; color: #6f6480;
+          font: 14px system-ui, sans-serif; }
+</style></head>
+<body>
+<canvas id="face"></canvas><div id="note">Tap for full screen</div>
+<script>
+  // Maja's face for an old phone or tablet. It asks Maja what she's doing a few times a
+  // second (idle, listening, thinking, speaking) and draws eyes and a mouth to match.
+  const fromLink = new URLSearchParams(location.hash.slice(1)).get("key");
+  if (fromLink) { try { localStorage.setItem("majaKey", fromLink); } catch (e) {} history.replaceState(null, "", "/face"); }
+  let key = fromLink;
+  try { key = key || localStorage.getItem("majaKey"); } catch (e) {}
+  const canvas = document.getElementById("face"), note = document.getElementById("note");
+  const ctx = canvas.getContext("2d");
+  let state = "idle", connected = false, blinkUntil = 0, nextBlink = performance.now() + 3000;
+
+  async function poll() {
+    try {
+      const response = await fetch("/api/state", { headers: { "X-Maja-Key": key || "" } });
+      if (response.status === 401) { note.textContent = "Open this page from Maja's phone link."; connected = false; }
+      else { state = (await response.json()).state; connected = true; }
+    } catch (e) { connected = false; }
+    setTimeout(poll, 350);
+  }
+
+  function roundedRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fill();
+  }
+
+  function draw(now) {
+    const w = canvas.width = innerWidth * devicePixelRatio, h = canvas.height = innerHeight * devicePixelRatio;
+    const unit = Math.min(w, h), t = now / 1000;
+    ctx.fillStyle = "#1b1525"; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = connected ? "#f4a4d4" : "#6f6480";
+    if (now > nextBlink) { blinkUntil = now + 130; nextBlink = now + 2500 + Math.random() * 4000; }
+
+    // Eyes: taller when listening, narrower and moving while thinking, closed while blinking.
+    let eyeH = unit * 0.26, eyeW = unit * 0.15, lookX = 0, lookY = 0;
+    if (state === "listening") { eyeH *= 1.12; eyeW *= 1.08; }
+    if (state === "thinking") { eyeH *= 0.62; lookX = Math.sin(t * 1.6) * unit * 0.05; lookY = -unit * 0.03; }
+    if (now < blinkUntil) eyeH = unit * 0.025;
+    for (const side of [-1, 1]) {
+      const cx = w / 2 + side * unit * 0.2 + lookX, cy = h * 0.42 + lookY;
+      roundedRect(cx - eyeW / 2, cy - eyeH / 2, eyeW, eyeH, eyeW * 0.45);
+    }
+
+    // Mouth: a small smile, an "o" when listening, moving while speaking, dots while thinking.
+    const my = h * 0.42 + unit * 0.26;
+    ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = unit * 0.025; ctx.lineCap = "round";
+    if (state === "speaking") {
+      const open = unit * (0.03 + 0.05 * Math.abs(Math.sin(t * 9) * Math.sin(t * 3.7)));
+      ctx.beginPath(); ctx.ellipse(w / 2, my, unit * 0.07, open, 0, 0, Math.PI * 2); ctx.fill();
+    } else if (state === "listening") {
+      ctx.beginPath(); ctx.ellipse(w / 2, my, unit * 0.035, unit * 0.035, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.25 + 0.2 * Math.sin(t * 4);
+      ctx.beginPath(); ctx.arc(w / 2, h * 0.45, unit * 0.42, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else if (state === "thinking") {
+      for (let i = 0; i < 3; i++) {
+        ctx.globalAlpha = 0.3 + 0.7 * Math.max(0, Math.sin(t * 4 - i * 0.8));
+        ctx.beginPath(); ctx.arc(w / 2 + (i - 1) * unit * 0.06, my, unit * 0.017, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.beginPath(); ctx.arc(w / 2, my - unit * 0.06, unit * 0.08, Math.PI * 0.2, Math.PI * 0.8); ctx.stroke();
+    }
+    requestAnimationFrame(draw);
+  }
+
+  document.body.addEventListener("click", () => {
+    note.textContent = "";
+    if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+  });
+  poll();
+  requestAnimationFrame(draw);
+</script>
+</body></html>
+"""
 
 
 PHONE_PAGE = """<!doctype html>

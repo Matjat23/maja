@@ -299,6 +299,11 @@ class WakeListener:
     def running(self):
         return self._stream is not None
 
+    @property
+    def awake(self):
+        """True right after "Hey Maja", while Maja waits for the message."""
+        return time.monotonic() < self._awake_until
+
     def start(self):
         try:
             self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
