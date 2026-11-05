@@ -88,6 +88,7 @@ main.py (window)          server.py (phone)
    ```
    py main.py
    ```
+5. Optional: `py autostart.py` puts Maja on the desktop and in the Start menu with her own icon, so she opens with a double click and without a console window.
 
 Typing works without any extra packages. The first reply can take up to a minute while the model loads, after that it's a few seconds. Notes, tasks and chat history are saved in `maja_data.json`, which is not committed to Git.
 

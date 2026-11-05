@@ -1,6 +1,7 @@
 """Start Maja's desktop window with: python main.py"""
 
 from pathlib import Path
+import ctypes
 import json
 import os
 import queue
@@ -90,8 +91,13 @@ def main():
     # Only one thing may change Maja's data at a time: the window, the phone, or reminders.
     maja_lock = threading.Lock()
 
+    if os.name == "nt":
+        # Its own taskbar entry and icon, instead of being grouped under Python.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Matjat23.Maja")
     root = tk.Tk()
     root.title("Maja 💜")
+    if (HERE / "maja.ico").exists():
+        root.iconbitmap(default=str(HERE / "maja.ico"))
     root.geometry("1000x660")
     root.minsize(760, 440)
     root.configure(bg=BG)
