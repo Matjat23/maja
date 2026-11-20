@@ -621,6 +621,17 @@ class CalendarTests(unittest.TestCase):
         self.assertIn("disconnected", self.maja.reply("calendar off"))
         self.assertIsNone(self.maja.setting("calendar_url"))
 
+    def test_a_calendar_link_never_reaches_the_ai_or_the_history(self):
+        link = "https://calendar.google.com/calendar/ical/someone%40gmail.com/private-abc123/basic.ics"
+        with mock.patch.object(Agenda, "connect") as connect, \
+                mock.patch.object(Agenda, "events", return_value=[]):
+            for message in [f"calender {link}", link, f"here is my calendar: {link}."]:
+                with self.subTest(message=message):
+                    self.assertIn("connected", self.maja.reply(message))
+                    connect.assert_called_with(link)
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.maja.history, [])
+
     def test_briefing_and_replies_know_the_calendar(self):
         self.maja.agenda.connect(self.SAMPLE)
         text = self.maja.morning_briefing(datetime(2026, 10, 19, 7, 0))

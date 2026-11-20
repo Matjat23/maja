@@ -102,6 +102,11 @@ def task_label(task):
     return f"{task['text']} (⏰ {describe_due(task['due'])}{repeat})"
 
 
+# A calendar's private ICS link (Google, Outlook, TimeEdit), and the ways people spell the
+# command word, so a typo like "calender <link>" still connects the calendar.
+CALENDAR_LINK = re.compile(r"(?:https?|webcal)://\S*(?:/ical/|\.ics)\S*", re.IGNORECASE)
+CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal"}
+
 # Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
 # ordinary sentence like "Think about it" never costs money by accident.
 CLOUD_PREFIX = re.compile(
@@ -289,6 +294,12 @@ class Maja:
         lower = message.lower()
         if not message:
             return "Type a message and I'll be here. 💜"
+        # A private calendar link works like a password, so it must never reach the AI, the
+        # chat history or the long-term memory. Whatever words come with it ("calender ...",
+        # just the link), it connects the calendar.
+        link = CALENDAR_LINK.search(message)
+        if link:
+            return self._calendar_command(link.group(0).rstrip(".,)>\"'"))
         pending, self.pending_action = self.pending_action, None
         if pending and lower.strip(" .!") in YES:
             return self._do_action(pending)
@@ -396,9 +407,9 @@ class Maja:
         if lower in {"briefing", "morning briefing", "my day", "what's my day?", "what's my day"}:
             return self.morning_briefing()
         command, _, argument = message.partition(" ")
-        if command.lower() == "calendar" or lower in {"my calendar", "what's on my calendar?",
-                                                      "what's on my calendar"}:
-            return self._calendar_command("" if command.lower() != "calendar" else argument.strip())
+        is_calendar_word = command.lower().rstrip(":") in CALENDAR_WORDS
+        if is_calendar_word or lower in {"my calendar", "what's on my calendar?", "what's on my calendar"}:
+            return self._calendar_command(argument.strip() if is_calendar_word else "")
         if lower.startswith("cloud budget"):
             return self._cloud_budget(lower[len("cloud budget"):].strip(" $"))
         if self.brain is None:
