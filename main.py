@@ -1,5 +1,6 @@
 """Start Maja's desktop window with: python main.py"""
 
+from datetime import date, datetime
 from pathlib import Path
 import ctypes
 import json
@@ -9,12 +10,13 @@ import re
 import shutil
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 
 from brain import BrainError, OllamaBrain
 from camera import CAMERA_AVAILABLE, Camera, CameraError, photo_for_model, preview_png
-from agenda import AGENDA_AVAILABLE, Agenda
+from agenda import AGENDA_AVAILABLE, Agenda, AgendaError, describe_event
 from jobs import JobRunner
 from markdown import markdown_runs
 from memory import Memory
@@ -274,7 +276,7 @@ def main():
                         answer = maja.reply(message, on_text=on_text)
             except OSError as error:
                 answer = f"I couldn't save that. Please check the folder permissions: {error}"
-            ui_calls.put(lambda: (set_busy(False), finish_reply(answer), refresh_tasks()))
+            ui_calls.put(lambda: (set_busy(False), finish_reply(answer), refresh_panel()))
 
         in_background(think)
 
@@ -579,6 +581,95 @@ def main():
     # --- Task panel: tick off or delete tasks with the mouse ------------------------------
     shown_tasks = None  # What the panel shows now, so it's only rebuilt when that changes.
     MAX_PANEL_TASKS = 12
+    MAX_PANEL_EVENTS = 6
+    TODAY_REFRESH_SECONDS = 30 * 60  # Calendars are downloaded at most this often anyway.
+    # Today's calendar events for the panel. They're read in the background, because
+    # downloading several calendars can take a while and the window must not freeze.
+    today_view = {"day": None, "calendars": None, "events": [], "unreadable": [], "error": "",
+                  "loaded": 0.0}
+    loading_today = False
+
+    def calendars_now():
+        return maja.agenda.calendars if maja.agenda is not None else []
+
+    def today_is_stale():
+        return (today_view["day"] != date.today() or today_view["calendars"] != calendars_now()
+                or time.monotonic() - today_view["loaded"] > TODAY_REFRESH_SECONDS)
+
+    def load_today():
+        nonlocal loading_today
+        if loading_today:
+            return
+        day, calendars = date.today(), calendars_now()
+        if not calendars:
+            today_view.update(day=day, calendars=calendars, events=[], unreadable=[], error="",
+                              loaded=time.monotonic())
+            refresh_tasks()
+            return
+        loading_today = True
+
+        def work():
+            try:
+                events, unreadable = maja.agenda.day_with_status(day)
+                result = {"events": events, "unreadable": unreadable, "error": ""}
+            except Exception as error:  # Never let the panel take the window down.
+                message = str(error) if isinstance(error, AgendaError) else "I couldn't read your calendar right now."
+                if today_view["day"] == day and today_view["events"]:
+                    # Keep what was shown before, and say it may be out of date.
+                    result = {"events": today_view["events"], "unreadable": today_view["unreadable"],
+                              "error": "Couldn't update your calendar, showing what I had."}
+                else:
+                    result = {"events": [], "unreadable": [], "error": message}
+
+            def show():
+                nonlocal loading_today
+                loading_today = False
+                today_view.update(day=day, calendars=calendars, loaded=time.monotonic(), **result)
+                refresh_tasks()
+
+            ui_calls.put(show)
+
+        in_background(work)
+
+    def refresh_panel():
+        if today_is_stale():
+            load_today()
+        refresh_tasks()
+
+    def show_today(now):
+        """The calendar part of the panel. Ended events are grey, not ticked off: time
+        passing doesn't mean they were done."""
+        calendars = calendars_now()
+        tk.Label(task_panel, text="📅 Today", font=("Segoe UI", 12, "bold"),
+                 bg=PANEL, fg=PINK, anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+
+        def note(text, color=GREY):
+            tk.Label(task_panel, text=text, font=("Segoe UI", 9), bg=PANEL, fg=color,
+                     wraplength=240, justify="left", anchor="w").pack(fill="x", padx=12)
+
+        if today_view["day"] != now.date():
+            note("Reading your calendar…")
+            return
+        events = today_view["events"]
+        ended = [not event["all_day"] and event["end"] <= now for event in events]
+        shown = list(zip(events, ended))
+        if len(shown) > MAX_PANEL_EVENTS and any(ended):
+            # Not enough room: what's still coming matters more than what's over.
+            note(f"✓ {sum(ended)} earlier today")
+            shown = [(event, False) for event, done in shown if not done]
+        if not events and not today_view["error"]:
+            note("Nothing on your calendar today.", WHITE)
+        for event, done in shown[:MAX_PANEL_EVENTS]:
+            text = describe_event(event, show_calendar=len(calendars) > 1, today=now.date())
+            tk.Label(task_panel, text=text, font=("Segoe UI", 10), bg=PANEL,
+                     fg=GREY if done else WHITE, wraplength=240, justify="left",
+                     anchor="w").pack(fill="x", padx=12, pady=1)
+        if len(shown) > MAX_PANEL_EVENTS:
+            note(f"... and {len(shown) - MAX_PANEL_EVENTS} more ('calendar')")
+        if today_view["unreadable"]:
+            note(f"(I couldn't read {' and '.join(today_view['unreadable'])} right now.)")
+        if today_view["error"]:
+            note(today_view["error"])
 
     def run_command(command):
         # Clicking in the panel works like typing the command, so Maja confirms it in the chat.
@@ -590,14 +681,21 @@ def main():
         nonlocal shown_tasks
         tasks = [(number, task) for number, task in enumerate(maja.data["tasks"], 1) if not task["done"]]
         schedules = list(enumerate(maja.data.get("schedules", []), 1))
-        snapshot = json.dumps([tasks, schedules], sort_keys=True, default=str)
+        now = datetime.now()
+        with_calendar = bool(calendars_now())
+        calendar_state = [today_view["day"], today_view["events"], today_view["unreadable"],
+                          today_view["error"], [not e["all_day"] and e["end"] <= now for e in today_view["events"]],
+                          now.date()] if with_calendar else None
+        snapshot = json.dumps([tasks, schedules, calendar_state], sort_keys=True, default=str)
         if snapshot == shown_tasks and not force:
             return
         shown_tasks = snapshot
         for child in task_panel.winfo_children():
             child.destroy()
+        if with_calendar:
+            show_today(now)
         tk.Label(task_panel, text=f"📋 Tasks ({len(tasks)})", font=("Segoe UI", 12, "bold"),
-                 bg=PANEL, fg=PINK, anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+                 bg=PANEL, fg=PINK, anchor="w").pack(fill="x", padx=12, pady=(14 if with_calendar else 12, 6))
         if not tasks:
             tk.Label(task_panel, text="No open tasks. Say something like 'remind me to call "
                      "mom tomorrow at 5'.", font=("Segoe UI", 9), bg=PANEL, fg=WHITE,
@@ -635,6 +733,7 @@ def main():
         if show:
             task_panel.pack(side="right", fill="y", padx=(0, 20), pady=(0, 12), before=conversation)
             refresh_tasks(force=True)
+            refresh_panel()
         else:
             task_panel.pack_forget()
         maja.change_setting("task_panel", show)
@@ -716,7 +815,7 @@ def main():
             for schedule in maja.due_schedules(limit=1):
                 start_job(schedule["task"], scheduled=True)
         if task_panel.winfo_ismapped():
-            refresh_tasks()  # Reminders and scheduled jobs move tasks on.
+            refresh_panel()  # Reminders, scheduled jobs and the clock move things on.
         root.after(REMINDER_CHECK_MS, check_reminders)
 
     # --- Briefing: once a day (from 5 am), or when Matty types 'briefing' ----------------
@@ -789,6 +888,8 @@ def main():
     root.after(100, run_ui_calls)
     root.after(1000, check_reminders)
     refresh_tasks(force=True)
+    if task_panel.winfo_ismapped():
+        load_today()
     if maja.setting("wake", False):
         root.after(500, toggle_wake)  # It was on last time, so it stays on (button shows it).
 

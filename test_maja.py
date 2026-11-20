@@ -13,7 +13,7 @@ from brain import BrainError
 from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from actions import mailto_link
-from agenda import AGENDA_AVAILABLE, Agenda, describe_event
+from agenda import AGENDA_AVAILABLE, Agenda, AgendaError, describe_event
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from jobs import JobRunner
 from markdown import markdown_runs, plain_text
@@ -713,6 +713,32 @@ class CalendarTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("offline")):
             self.assertEqual(len(agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))), 1)
 
+    def test_events_without_an_end_time_still_last(self):
+        path = Path(self.temporary.name) / "ends.ics"
+        path.write_bytes("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", "X-WR-CALNAME:Ends",
+            "BEGIN:VEVENT", "UID:a@test", "DTSTAMP:20261001T000000Z", "DTSTART;VALUE=DATE:20261019",
+            "SUMMARY:Holiday", "END:VEVENT",
+            "BEGIN:VEVENT", "UID:b@test", "DTSTAMP:20261001T000000Z", "DTSTART:20261019T090000",
+            "DURATION:PT90M", "SUMMARY:Meeting", "END:VEVENT", "END:VCALENDAR", "",
+        ]).encode())
+        self.maja.agenda.connect(str(path))
+        events, unreadable = self.maja.agenda.day_with_status(date(2026, 10, 19))
+        self.assertEqual(unreadable, [])
+        ends = {event["title"]: event["end"] for event in events}
+        self.assertEqual(ends["Holiday"], datetime(2026, 10, 20))
+        self.assertEqual(ends["Meeting"], datetime(2026, 10, 19, 10, 30))
+
+    def test_the_model_sees_all_of_today_and_calls_them_events(self):
+        self.maja.agenda.connect(self.SAMPLE)
+        with mock.patch.object(Agenda, "events", return_value=[]) as events:
+            text = self.maja._calendar_for_prompt()
+        start = events.call_args[0][0]
+        self.assertEqual((start.date(), start.hour, start.minute), (date.today(), 0, 0))
+        self.assertIn("calendar events, not tasks", text)
+        with mock.patch.object(Agenda, "events", side_effect=AgendaError("offline")):
+            self.assertIn("couldn't be read", self.maja._calendar_for_prompt())
+
     def test_a_calendar_link_never_reaches_the_ai_or_the_history(self):
         link = "https://calendar.google.com/calendar/ical/someone%40gmail.com/private-abc123/basic.ics"
         with mock.patch.object(Agenda, "connect") as connect, \
@@ -729,7 +755,7 @@ class CalendarTests(unittest.TestCase):
         text = self.maja.morning_briefing(datetime(2026, 10, 19, 7, 0))
         self.assertIn("Today, Monday 19 October:\n📅 10:00-12:00 Sample lecture", text)
         self.maja.reply("When is my next lecture?")
-        self.assertIn("Matty's calendar for the next 7 days", self.brain.calls[-1][0]["content"])
+        self.assertIn("Matty's calendar from today until 7 days ahead", self.brain.calls[-1][0]["content"])
 
     def test_offline_copy_is_used_when_the_link_stops_working(self):
         copy = Path(self.temporary.name) / "calendar.ics"
