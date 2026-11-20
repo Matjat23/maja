@@ -9,6 +9,7 @@ events, like a weekly lecture, are expanded into the individual dates.
 
 import hashlib
 import re
+import threading
 import time
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -57,6 +58,8 @@ class Agenda:
         self.cache_folder = Path(cache_folder)
         self._loaded = {}  # url -> (calendar, when it was downloaded)
         self.unreadable = []  # Names of the calendars the last events() call couldn't read.
+        # The window reads today's events in the background while chat may read them too.
+        self._lock = threading.RLock()
         self._migrate(old_cache)
 
     def _migrate(self, old_cache):
@@ -158,6 +161,10 @@ class Agenda:
         """Events from all calendars between two local datetimes, sorted by start time.
         A calendar that can't be read is skipped and its name is put in self.unreadable;
         if none can be read, AgendaError is raised."""
+        with self._lock:
+            return self._all_events(start, end)
+
+    def _all_events(self, start, end):
         self.unreadable = []
         if not self.calendars:
             raise AgendaError("No calendar is connected yet. Paste your calendar's private ICS "
@@ -177,8 +184,13 @@ class Agenda:
         calendar = self._download(entry["url"])
         for event in recurring_ical_events.of(calendar).between(start, end):
             begins, all_day = local_time(event.get("DTSTART").dt)
-            ends = event.get("DTEND")
-            finishes = local_time(ends.dt)[0] if ends else begins
+            ends, duration = event.get("DTEND"), event.get("DURATION")
+            if ends:
+                finishes = local_time(ends.dt)[0]
+            elif duration:
+                finishes = begins + duration.dt
+            else:  # Without an end, an all-day event lasts its day; a timed one is a moment.
+                finishes = begins + timedelta(days=1) if all_day else begins
             found.append({
                 "start": begins,
                 "end": finishes,
@@ -198,6 +210,12 @@ class Agenda:
     def day(self, day):
         start = datetime.combine(day, datetime.min.time())
         return self.events(start, start + timedelta(days=1))
+
+    def day_with_status(self, day):
+        """Today's events and the names of the calendars that couldn't be read, read
+        together so another thread can't mix them up."""
+        with self._lock:
+            return self.day(day), list(self.unreadable)
 
 
 def describe_event(event, with_day=False, show_calendar=False, today=None):

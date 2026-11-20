@@ -3,7 +3,7 @@
 import json
 import re
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import autostart
@@ -529,19 +529,23 @@ class Maja:
         return "\n".join(lines + ([note] if note else []))
 
     def _calendar_for_prompt(self):
-        """The next 7 days of the calendar, for Maja's instructions ('' if there's none)."""
+        """Today and the next 7 days of the calendar, for Maja's instructions ('' if
+        no calendar is connected)."""
         if self.agenda is None or not self.agenda.url:
             return ""
+        heading = ("\nMatty's calendar from today until 7 days ahead. These are calendar "
+                   "events, not tasks: call them events, and only call the items in the open "
+                   "tasks list tasks.\n")
         try:
-            now = datetime.now()
-            events = self.agenda.events(now, now + timedelta(days=7))[:40]
+            today = datetime.combine(date.today(), datetime.min.time())
+            events = self.agenda.events(today, today + timedelta(days=8))[:40]
         except AgendaError:
-            return ""
+            return heading + "(The calendar couldn't be read right now, so you don't know what's on it.)"
         lines = "\n".join(f"- {self._describe(event, with_day=True)}" for event in events) or "(nothing)"
         note = self.agenda.unreadable_note()
         if note:
             lines += f"\n{note} So the list may be missing events."
-        return f"\nMatty's calendar for the next 7 days:\n{lines}"
+        return heading + lines
 
     def _cloud_budget(self, amount):
         if self.cloud is None:
