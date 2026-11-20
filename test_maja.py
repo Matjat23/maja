@@ -597,7 +597,7 @@ class CalendarTests(unittest.TestCase):
         folder = Path(self.temporary.name)
         self.brain = FakeBrain("Hi!")
         self.maja = Maja(folder / "data.json", self.brain)
-        self.maja.agenda = Agenda(self.maja, folder / "cache.ics")
+        self.maja.agenda = Agenda(self.maja, folder / "cache")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -616,10 +616,102 @@ class CalendarTests(unittest.TestCase):
     def test_calendar_commands(self):
         self.assertIn("No calendar is connected", self.maja.reply("calendar"))
         self.assertIn("doesn't look like a calendar link", self.maja.reply("calendar hello"))
-        self.assertIn("connected", self.maja.reply(f"calendar {self.SAMPLE}"))
-        self.assertEqual(self.maja.setting("calendar_url"), self.SAMPLE)
-        self.assertIn("disconnected", self.maja.reply("calendar off"))
+        self.assertIn("Connected", self.maja.reply(f"calendar {self.SAMPLE}"))
+        self.assertEqual(self.maja.setting("calendars"), [{"name": "Calendar 1", "url": self.SAMPLE}])
+        self.assertIn("1. 📅 Calendar 1", self.maja.reply("calendars"))
+        self.assertIn("disconnected 1 calendar", self.maja.reply("calendar off"))
+        self.assertEqual(self.maja.setting("calendars"), [])
+
+    def test_several_calendars_are_shown_together(self):
+        fitness = Path(self.temporary.name) / "fitness.ics"
+        fitness.write_bytes("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", "X-WR-CALNAME:Fitness", "BEGIN:VEVENT",
+            "UID:run@test", "DTSTAMP:20261001T000000Z", "DTSTART:20261019T070000",
+            "DTEND:20261019T080000", "SUMMARY:Morning run", "END:VEVENT", "END:VCALENDAR", "",
+        ]).encode())
+        self.maja.reply(f"calendar {self.SAMPLE}")
+        answer = self.maja.reply(f"calender {fitness}")
+        self.assertIn("Connected 'Fitness'", answer)
+        self.assertIn("You now have 2 calendars connected", answer)
+        text = self.maja.morning_briefing(datetime(2026, 10, 19, 6, 0))
+        self.assertIn("📅 07:00-08:00 Morning run [Fitness]\n📅 10:00-12:00 Sample lecture", text)
+        self.assertIn("disconnected 'Calendar 1'", self.maja.reply("calendar remove 1"))
+        self.assertEqual([c["name"] for c in self.maja.agenda.calendars], ["Fitness"])
+
+    def test_the_old_single_calendar_setting_is_moved_over(self):
+        self.maja.change_setting("calendar_url", self.SAMPLE)
+        agenda = Agenda(self.maja, Path(self.temporary.name) / "cache2")
+        self.assertEqual(agenda.calendars, [{"name": "My calendar", "url": self.SAMPLE}])
         self.assertIsNone(self.maja.setting("calendar_url"))
+
+    def test_ongoing_events_say_until_when(self):
+        event = {"start": datetime(2026, 11, 1), "end": datetime(2026, 12, 5), "all_day": True,
+                 "title": "Exchange applications open", "location": "", "calendar": "Studies"}
+        self.assertEqual(describe_event(event, with_day=True, show_calendar=True, today=date(2026, 11, 20)),
+                         "ongoing until Fri 04 Dec: Exchange applications open [Studies]")
+
+    def write_calendar(self, file_name, name, summary="Morning run"):
+        path = Path(self.temporary.name) / file_name
+        path.write_bytes("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", f"X-WR-CALNAME:{name}", "BEGIN:VEVENT",
+            "UID:run@test", "DTSTAMP:20261001T000000Z", "DTSTART:20261019T070000",
+            "DTEND:20261019T080000", f"SUMMARY:{summary}", "END:VEVENT", "END:VCALENDAR", "",
+        ]).encode())
+        return path
+
+    def test_a_calendar_named_after_its_link_gets_a_plain_name(self):
+        named = self.write_calendar("named.ics", "https://example.invalid/feed?token=SECRET")
+        self.assertIn("Connected 'Calendar 1'", self.maja.reply(f"calendar {named}"))
+
+    def test_any_link_after_the_word_calendar_is_kept_secret(self):
+        link = "https://example.invalid/feed?token=SECRET"
+        with mock.patch.object(Agenda, "connect", return_value="Work") as connect, \
+                mock.patch.object(Agenda, "events", return_value=[]):
+            self.assertIn("Connected 'Work'", self.maja.reply(f"calendar: {link}"))
+            connect.assert_called_with(link)
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.maja.history, [])
+
+    def test_a_connected_link_is_never_sent_anywhere(self):
+        link = "https://example.invalid/feed?token=SECRET"
+        self.maja.change_setting("calendars", [{"name": "Work", "url": link}])
+        self.assertEqual(self.maja.calendar_link_in(f"is this right? {link}"), link)
+        with mock.patch.object(Agenda, "connect", return_value="Work"), \
+                mock.patch.object(Agenda, "events", return_value=[]):
+            self.maja.reply(f"is this right? {link}")
+            self.maja.reply_about_photo(f"what is this {link}", "photo")
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.maja.history, [])
+        self.assertIsNone(self.maja.calendar_link_in("look at https://example.com/news"))
+
+    def test_a_calendar_that_cannot_be_read_is_mentioned(self):
+        work = self.write_calendar("work.ics", "Work", summary="Standup")
+        self.maja.reply(f"calendar {self.SAMPLE}")
+        self.maja.reply(f"calendar {work}")
+        work.unlink()  # Work can't be reached and has a broken offline copy.
+        self.maja.agenda._cache_file(str(work)).write_bytes(b"not a calendar")
+        self.maja.agenda._loaded.clear()
+        text = self.maja.morning_briefing(datetime(2026, 10, 19, 6, 0))
+        self.assertIn("📅 10:00-12:00 Sample lecture", text)
+        self.assertIn("📅 (I couldn't read Work right now.)", text)
+
+    def test_reconnecting_a_calendar_keeps_its_number(self):
+        work = self.write_calendar("work.ics", "Work")
+        self.maja.reply(f"calendar {work}")
+        self.maja.reply(f"calendar {self.SAMPLE}")
+        self.maja.reply(f"calendar {work}")
+        self.assertEqual([c["name"] for c in self.maja.agenda.calendars], ["Work", "Calendar 2"])
+
+    def test_the_old_offline_copy_is_moved_over(self):
+        folder = Path(self.temporary.name)
+        old_cache = folder / "calendar_cache.ics"
+        old_cache.write_bytes(Path(self.SAMPLE).read_bytes())
+        link = "https://example.invalid/old.ics"
+        self.maja.change_setting("calendar_url", link)
+        agenda = Agenda(self.maja, folder / "cache3", old_cache=old_cache)
+        self.assertFalse(old_cache.exists())
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("offline")):
+            self.assertEqual(len(agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))), 1)
 
     def test_a_calendar_link_never_reaches_the_ai_or_the_history(self):
         link = "https://calendar.google.com/calendar/ical/someone%40gmail.com/private-abc123/basic.ics"
@@ -627,7 +719,7 @@ class CalendarTests(unittest.TestCase):
                 mock.patch.object(Agenda, "events", return_value=[]):
             for message in [f"calender {link}", link, f"here is my calendar: {link}."]:
                 with self.subTest(message=message):
-                    self.assertIn("connected", self.maja.reply(message))
+                    self.assertIn("Connected", self.maja.reply(message))
                     connect.assert_called_with(link)
         self.assertEqual(self.brain.calls, [])
         self.assertEqual(self.maja.history, [])
@@ -640,9 +732,11 @@ class CalendarTests(unittest.TestCase):
         self.assertIn("Matty's calendar for the next 7 days", self.brain.calls[-1][0]["content"])
 
     def test_offline_copy_is_used_when_the_link_stops_working(self):
-        self.maja.agenda.connect(self.SAMPLE)
-        self.maja.change_setting("calendar_url", "https://example.invalid/calendar.ics")
-        self.maja.agenda._calendar = None  # Force a new download, which fails.
+        copy = Path(self.temporary.name) / "calendar.ics"
+        copy.write_bytes(Path(self.SAMPLE).read_bytes())
+        self.maja.agenda.connect(str(copy))
+        copy.unlink()  # The "link" can't be reached anymore...
+        self.maja.agenda._loaded.clear()  # ...and a new download is forced.
         events = self.maja.agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))
         self.assertEqual(len(events), 1)
 

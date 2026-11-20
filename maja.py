@@ -105,7 +105,8 @@ def task_label(task):
 # A calendar's private ICS link (Google, Outlook, TimeEdit), and the ways people spell the
 # command word, so a typo like "calender <link>" still connects the calendar.
 CALENDAR_LINK = re.compile(r"(?:https?|webcal)://\S*(?:/ical/|\.ics)\S*", re.IGNORECASE)
-CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal"}
+ANY_LINK = re.compile(r"(?:https?|webcal)://\S+", re.IGNORECASE)
+CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal", "calendars", "calenders"}
 
 # Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
 # ordinary sentence like "Think about it" never costs money by accident.
@@ -297,9 +298,9 @@ class Maja:
         # A private calendar link works like a password, so it must never reach the AI, the
         # chat history or the long-term memory. Whatever words come with it ("calender ...",
         # just the link), it connects the calendar.
-        link = CALENDAR_LINK.search(message)
+        link = self.calendar_link_in(message)
         if link:
-            return self._calendar_command(link.group(0).rstrip(".,)>\"'"))
+            return self._calendar_command(link)
         pending, self.pending_action = self.pending_action, None
         if pending and lower.strip(" .!") in YES:
             return self._do_action(pending)
@@ -409,6 +410,8 @@ class Maja:
         command, _, argument = message.partition(" ")
         is_calendar_word = command.lower().rstrip(":") in CALENDAR_WORDS
         if is_calendar_word or lower in {"my calendar", "what's on my calendar?", "what's on my calendar"}:
+            if command.lower().rstrip(":") in {"calendars", "calenders"} and not argument.strip():
+                return self._calendar_command("list")
             return self._calendar_command(argument.strip() if is_calendar_word else "")
         if lower.startswith("cloud budget"):
             return self._cloud_budget(lower[len("cloud budget"):].strip(" $"))
@@ -463,27 +466,67 @@ class Maja:
             what = "calendar" if action["kind"] == "event" else "email"
             return f"I couldn't open your {what} app. Is one set up in Windows?"
 
+    def calendar_link_in(self, message):
+        """The private calendar link in a message, or None. It counts as one when it looks
+        like an ICS link, when it's the link of a calendar that's already connected, or
+        when the message starts with 'calendar'. The window checks this too, so a link
+        never goes to a photo question or a job either."""
+        found = CALENDAR_LINK.search(message)
+        if found is None:
+            first = message.split(maxsplit=1)
+            if first and first[0].lower().rstrip(":") in CALENDAR_WORDS:
+                found = ANY_LINK.search(message)
+        if found is not None:
+            return found.group(0).rstrip(".,)>\"'")
+        if self.agenda is not None:
+            return next((c["url"] for c in self.agenda.calendars if c["url"] in message), None)
+        return None
+
     def _calendar_command(self, argument):
         if self.agenda is None:
             return ("Reading a calendar needs extra packages. In a terminal, run: "
                     "py -m pip install -r requirements.txt, then restart me.")
+        words = argument.lower().split()
         try:
-            if argument.lower() == "off":
-                self.agenda.disconnect()
-                return "Okay, I've disconnected your calendar."
+            if words in (["off"], ["remove", "all"]):
+                removed = self.agenda.disconnect()
+                return f"Okay, I've disconnected {len(removed)} calendar(s)."
+            if len(words) == 2 and words[0] == "remove" and words[1].isdigit():
+                removed = self.agenda.disconnect(int(words[1]))
+                if not removed:
+                    return "Use a number from 'calendars', for example 'calendar remove 2'."
+                return f"Okay, I've disconnected '{removed[0]['name']}'."
+            if words in (["list"], ["s"]):
+                return self._calendar_list()
             if argument:
-                self.agenda.connect(argument)
-                return "Your calendar is connected! 📅 Here's what's coming up:\n" + self._week_ahead()
+                name = self.agenda.connect(argument)
+                count = len(self.agenda.calendars)
+                more = (f" You now have {count} calendars connected; paste another link to add "
+                        "more." if count > 1 else " Paste another calendar's link to add it too.")
+                return (f"Connected '{name}'! 📅{more} Here's what's coming up:\n" + self._week_ahead())
             return self._week_ahead()
         except AgendaError as error:
             return str(error)
 
+    def _calendar_list(self):
+        calendars = self.agenda.calendars
+        if not calendars:
+            return "No calendars connected yet. Paste a calendar's private ICS link to add one."
+        return ("Connected calendars:\n" + "\n".join(f"{i}. 📅 {c['name']}" for i, c in enumerate(calendars, 1))
+                + "\nPaste another link to add one, or 'calendar remove 2' to remove one.")
+
+    def _describe(self, event, with_day=False):
+        """An event, with its calendar's name when there's more than one calendar."""
+        return describe_event(event, with_day=with_day, show_calendar=len(self.agenda.calendars) > 1)
+
     def _week_ahead(self, now=None):
         now = now or datetime.now()
         events = self.agenda.events(now, now + timedelta(days=7))
+        note = self.agenda.unreadable_note()
         if not events:
-            return "Nothing on your calendar for the next 7 days."
-        return "\n".join(f"📅 {describe_event(event, with_day=True)}" for event in events)
+            return note or "Nothing on your calendars for the next 7 days."
+        lines = [f"📅 {self._describe(event, with_day=True)}" for event in events]
+        return "\n".join(lines + ([note] if note else []))
 
     def _calendar_for_prompt(self):
         """The next 7 days of the calendar, for Maja's instructions ('' if there's none)."""
@@ -491,10 +534,13 @@ class Maja:
             return ""
         try:
             now = datetime.now()
-            events = self.agenda.events(now, now + timedelta(days=7))[:25]
+            events = self.agenda.events(now, now + timedelta(days=7))[:40]
         except AgendaError:
             return ""
-        lines = "\n".join(f"- {describe_event(event, with_day=True)}" for event in events) or "(nothing)"
+        lines = "\n".join(f"- {self._describe(event, with_day=True)}" for event in events) or "(nothing)"
+        note = self.agenda.unreadable_note()
+        if note:
+            lines += f"\n{note} So the list may be missing events."
         return f"\nMatty's calendar for the next 7 days:\n{lines}"
 
     def _cloud_budget(self, amount):
@@ -536,7 +582,9 @@ class Maja:
         lines = [f"Today, {now:%A %d %B}:"]
         if self.agenda is not None and self.agenda.url:
             try:
-                lines += [f"📅 {describe_event(event)}" for event in self.agenda.day(today)]
+                lines += [f"📅 {self._describe(event)}" for event in self.agenda.day(today)]
+                if self.agenda.unreadable:
+                    lines.append(f"📅 {self.agenda.unreadable_note()}")
             except AgendaError:
                 lines.append("📅 (I couldn't read your calendar right now.)")
         lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today]
@@ -582,6 +630,9 @@ class Maja:
     def reply_about_photo(self, message, photo):
         """Answer a message about a camera photo (base64 JPEG). The photo isn't stored;
         the chat history only records that there was one."""
+        link = self.calendar_link_in(message)
+        if link:
+            return self._calendar_command(link)  # The link must not reach the model.
         if self.brain is None:
             return "I need my AI model to look at photos."
         question = message.strip() or "What do you see?"

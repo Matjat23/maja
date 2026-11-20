@@ -23,7 +23,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Look at what I hold up to the webcam (Qwen2.5-VL vision model)
 - Chat from my phone over home Wi-Fi
 - Start with Windows, so reminders work all day
-- Read my calendar (Outlook, Google or TimeEdit) and include today's events in the morning overview
+- Read my calendars (Outlook, Google or TimeEdit) and include today's events in the morning overview
 - Add events to my calendar and draft emails, but only after I say yes, and I still save or send them myself
 - Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
 - Work on bigger tasks in the background ("job: make me a study plan for the exam") and save a report
@@ -104,15 +104,15 @@ The plan is that Maja's brain stays on the laptop and a small robot on my desk i
 
 ## Calendar (optional)
 
-Maja reads my calendar through its private ICS link. She can't change anything in it, and she doesn't need my password. Type `calendar` followed by the link to connect it, `calendar` to see the next 7 days and `calendar off` to disconnect.
+Maja reads my calendars through their private ICS links. She can't change anything in them, and she doesn't need my password. Type `calendar` followed by a link to connect it, and do the same for every other calendar I want her to see. `calendar` shows the next 7 days from all of them, with each event's calendar name when there's more than one. `calendars` lists what's connected, `calendar remove 2` disconnects the second one and `calendar off` disconnects all of them.
 
 Getting the link:
 
 - Outlook: Settings, Calendar, Shared calendars, Publish a calendar. Pick the calendar and "Can view all details", click Publish and copy the ICS link.
-- Google Calendar: Settings, click the calendar, Integrate calendar, copy "Secret address in iCal format".
+- Google Calendar: Settings, click the calendar, Integrate calendar, copy "Secret address in iCal format". Each calendar has its own address.
 - TimeEdit: open the schedule, click Subscribe and copy the link.
 
-The link works like a password for reading the calendar, so it's only stored in `maja_data.json`. Repeating events are expanded into individual dates, times are converted to the computer's time zone, and a copy is kept so it also works offline. In demo mode a sample calendar is connected automatically.
+A link works like a password for reading the calendar, so links are only stored in `maja_data.json` and never sent to the language model. Repeating events are expanded into individual dates, times are converted to the computer's time zone, and a copy is kept so it also works offline. In demo mode a sample calendar is connected automatically.
 
 ## Jobs
 
