@@ -74,7 +74,7 @@ def main():
         if library is not None:
             maja.memory = Memory(library, brain, DATA / "chat_archive.jsonl")
         if AGENDA_AVAILABLE:
-            maja.agenda = Agenda(maja, DATA / "calendar_cache")
+            maja.agenda = Agenda(maja, DATA / "calendar_cache", old_cache=DATA / "calendar_cache.ics")
             sample = HERE / "demo_documents" / "sample-calendar.ics"
             if DEMO and not maja.agenda.url and sample.exists():
                 maja.change_setting("calendars", [{"name": "Sample calendar", "url": str(sample)}])
@@ -249,13 +249,15 @@ def main():
             append("You", message)
             renew_phone_key()
             return
-        job = JOB_PREFIX.match(message)
-        if job or message.lower() == "open last job":
+        # A private calendar link is only ever handled by reply(), never by a job or a photo.
+        secret = maja.calendar_link_in(message) is not None
+        job = None if secret else JOB_PREFIX.match(message)
+        if job or (not secret and message.lower() == "open last job"):
             append("You", message)
             start_job(job.group(1).strip()) if job else open_last_job()
             return
         # With the camera on, the message is about what the camera sees right now.
-        photo = photo_for_model(frame) if frame is not None else None
+        photo = photo_for_model(frame) if frame is not None and not secret else None
         append("You 📷" if photo else "You", message or "What do you see?")
         speaker.stop()
         set_busy(True, "Maja is looking…" if photo else "Maja is thinking…")

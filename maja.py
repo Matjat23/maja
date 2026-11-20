@@ -105,6 +105,7 @@ def task_label(task):
 # A calendar's private ICS link (Google, Outlook, TimeEdit), and the ways people spell the
 # command word, so a typo like "calender <link>" still connects the calendar.
 CALENDAR_LINK = re.compile(r"(?:https?|webcal)://\S*(?:/ical/|\.ics)\S*", re.IGNORECASE)
+ANY_LINK = re.compile(r"(?:https?|webcal)://\S+", re.IGNORECASE)
 CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal", "calendars", "calenders"}
 
 # Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
@@ -297,9 +298,9 @@ class Maja:
         # A private calendar link works like a password, so it must never reach the AI, the
         # chat history or the long-term memory. Whatever words come with it ("calender ...",
         # just the link), it connects the calendar.
-        link = CALENDAR_LINK.search(message)
+        link = self.calendar_link_in(message)
         if link:
-            return self._calendar_command(link.group(0).rstrip(".,)>\"'"))
+            return self._calendar_command(link)
         pending, self.pending_action = self.pending_action, None
         if pending and lower.strip(" .!") in YES:
             return self._do_action(pending)
@@ -465,6 +466,22 @@ class Maja:
             what = "calendar" if action["kind"] == "event" else "email"
             return f"I couldn't open your {what} app. Is one set up in Windows?"
 
+    def calendar_link_in(self, message):
+        """The private calendar link in a message, or None. It counts as one when it looks
+        like an ICS link, when it's the link of a calendar that's already connected, or
+        when the message starts with 'calendar'. The window checks this too, so a link
+        never goes to a photo question or a job either."""
+        found = CALENDAR_LINK.search(message)
+        if found is None:
+            first = message.split(maxsplit=1)
+            if first and first[0].lower().rstrip(":") in CALENDAR_WORDS:
+                found = ANY_LINK.search(message)
+        if found is not None:
+            return found.group(0).rstrip(".,)>\"'")
+        if self.agenda is not None:
+            return next((c["url"] for c in self.agenda.calendars if c["url"] in message), None)
+        return None
+
     def _calendar_command(self, argument):
         if self.agenda is None:
             return ("Reading a calendar needs extra packages. In a terminal, run: "
@@ -505,9 +522,11 @@ class Maja:
     def _week_ahead(self, now=None):
         now = now or datetime.now()
         events = self.agenda.events(now, now + timedelta(days=7))
+        note = self.agenda.unreadable_note()
         if not events:
-            return "Nothing on your calendars for the next 7 days."
-        return "\n".join(f"📅 {self._describe(event, with_day=True)}" for event in events)
+            return note or "Nothing on your calendars for the next 7 days."
+        lines = [f"📅 {self._describe(event, with_day=True)}" for event in events]
+        return "\n".join(lines + ([note] if note else []))
 
     def _calendar_for_prompt(self):
         """The next 7 days of the calendar, for Maja's instructions ('' if there's none)."""
@@ -519,6 +538,9 @@ class Maja:
         except AgendaError:
             return ""
         lines = "\n".join(f"- {self._describe(event, with_day=True)}" for event in events) or "(nothing)"
+        note = self.agenda.unreadable_note()
+        if note:
+            lines += f"\n{note} So the list may be missing events."
         return f"\nMatty's calendar for the next 7 days:\n{lines}"
 
     def _cloud_budget(self, amount):
@@ -561,6 +583,8 @@ class Maja:
         if self.agenda is not None and self.agenda.url:
             try:
                 lines += [f"📅 {self._describe(event)}" for event in self.agenda.day(today)]
+                if self.agenda.unreadable:
+                    lines.append(f"📅 {self.agenda.unreadable_note()}")
             except AgendaError:
                 lines.append("📅 (I couldn't read your calendar right now.)")
         lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today]
@@ -606,6 +630,9 @@ class Maja:
     def reply_about_photo(self, message, photo):
         """Answer a message about a camera photo (base64 JPEG). The photo isn't stored;
         the chat history only records that there was one."""
+        link = self.calendar_link_in(message)
+        if link:
+            return self._calendar_command(link)  # The link must not reach the model.
         if self.brain is None:
             return "I need my AI model to look at photos."
         question = message.strip() or "What do you see?"

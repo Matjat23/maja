@@ -8,6 +8,7 @@ events, like a weekly lecture, are expanded into the individual dates.
 """
 
 import hashlib
+import re
 import time
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -21,6 +22,7 @@ except ImportError:
     AGENDA_AVAILABLE = False
 
 REFRESH_SECONDS = 30 * 60
+LINK = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 
 
 class AgendaError(Exception):
@@ -45,27 +47,38 @@ def clean_link(url):
 
 
 class Agenda:
-    def __init__(self, settings, cache_folder):
-        """settings is Maja: the links are stored with her other settings."""
+    def __init__(self, settings, cache_folder, old_cache=None):
+        """settings is Maja: the links are stored with her other settings. old_cache is
+        where the single calendar used to keep its offline copy."""
         if not AGENDA_AVAILABLE:
             raise AgendaError("Reading a calendar needs extra packages. In a terminal, run: "
                               "py -m pip install -r requirements.txt, then restart me.")
         self.settings = settings
         self.cache_folder = Path(cache_folder)
         self._loaded = {}  # url -> (calendar, when it was downloaded)
-        self._migrate()
+        self.unreadable = []  # Names of the calendars the last events() call couldn't read.
+        self._migrate(old_cache)
 
-    def _migrate(self):
-        """Maja used to keep one link in 'calendar_url'; it becomes the first of the list."""
+    def _migrate(self, old_cache):
+        """Maja used to keep one link in 'calendar_url'; it becomes the first of the list,
+        and its offline copy moves along so it still works without internet."""
         old = self.settings.setting("calendar_url")
         if old and not self.settings.setting("calendars"):
             self.settings.change_setting("calendars", [{"name": "My calendar", "url": old}])
+            new_cache = self._cache_file(old)
+            if old_cache and Path(old_cache).is_file() and not new_cache.exists():
+                self.cache_folder.mkdir(parents=True, exist_ok=True)
+                Path(old_cache).replace(new_cache)
         if old:
             self.settings.change_setting("calendar_url", None)
 
     @property
     def calendars(self):
         return list(self.settings.setting("calendars") or [])
+
+    def is_connected_link(self, text):
+        """True if the text contains the link of a connected calendar."""
+        return any(c["url"] in text for c in self.calendars if LINK.match(c["url"]))
 
     @property
     def url(self):
@@ -79,9 +92,18 @@ class Agenda:
         if not (url.lower().startswith("https://") or Path(url).is_file()):
             raise AgendaError("That doesn't look like a calendar link. It should start with "
                               "https:// or webcal:// and usually ends with .ics.")
+        self._loaded.pop(url, None)  # Connecting always reads the calendar again.
         calendar = self._download(url, use_copy=False)
-        name = str(calendar.get("X-WR-CALNAME", "")).strip() or f"Calendar {len(self.calendars) + 1}"
-        calendars = [c for c in self.calendars if c["url"] != url] + [{"name": name, "url": url}]
+        calendars = self.calendars
+        position = next((i for i, c in enumerate(calendars) if c["url"] == url), len(calendars))
+        name = " ".join(str(calendar.get("X-WR-CALNAME", "")).split())[:60]
+        # The name is shown to the language model, so it must never carry a link.
+        if not name or LINK.search(name):
+            name = f"Calendar {position + 1}"
+        if position < len(calendars):
+            calendars[position] = {"name": name, "url": url}  # Keeps its place and number.
+        else:
+            calendars.append({"name": name, "url": url})
         self.settings.change_setting("calendars", calendars)
         return name
 
@@ -124,38 +146,54 @@ class Agenda:
             if not use_copy or not cache.exists():
                 raise AgendaError("I couldn't read that calendar. Check the link and the internet "
                                   "connection.") from error
-            calendar = icalendar.Calendar.from_ical(cache.read_bytes())  # Offline copy.
+            try:
+                calendar = icalendar.Calendar.from_ical(cache.read_bytes())  # Offline copy.
+            except Exception as broken:
+                raise AgendaError("I couldn't read that calendar, and my offline copy is "
+                                  "broken.") from broken
         self._loaded[url] = (calendar, time.monotonic())
         return calendar
 
     def events(self, start, end):
         """Events from all calendars between two local datetimes, sorted by start time.
-        A calendar that can't be read is skipped; if none can, AgendaError is raised."""
+        A calendar that can't be read is skipped and its name is put in self.unreadable;
+        if none can be read, AgendaError is raised."""
+        self.unreadable = []
         if not self.calendars:
             raise AgendaError("No calendar is connected yet. Paste your calendar's private ICS "
                               "link here (see the README for how to get it).")
-        found, failures = [], 0
+        found = []
         for entry in self.calendars:
             try:
-                calendar = self._download(entry["url"])
-            except AgendaError:
-                failures += 1
-                continue
-            for event in recurring_ical_events.of(calendar).between(start, end):
-                begins, all_day = local_time(event.get("DTSTART").dt)
-                ends = event.get("DTEND")
-                finishes = local_time(ends.dt)[0] if ends else begins
-                found.append({
-                    "start": begins,
-                    "end": finishes,
-                    "all_day": all_day,
-                    "title": str(event.get("SUMMARY", "(no title)")).strip(),
-                    "location": str(event.get("LOCATION", "")).strip(),
-                    "calendar": entry["name"],
-                })
-        if failures == len(self.calendars):
+                found += self._events_of(entry, start, end)
+            except Exception:  # A broken calendar must not hide the others.
+                self.unreadable.append(entry["name"])
+        if len(self.unreadable) == len(self.calendars):
             raise AgendaError("I couldn't read your calendars right now. Check the internet connection.")
         return sorted(found, key=lambda event: event["start"])
+
+    def _events_of(self, entry, start, end):
+        found = []
+        calendar = self._download(entry["url"])
+        for event in recurring_ical_events.of(calendar).between(start, end):
+            begins, all_day = local_time(event.get("DTSTART").dt)
+            ends = event.get("DTEND")
+            finishes = local_time(ends.dt)[0] if ends else begins
+            found.append({
+                "start": begins,
+                "end": finishes,
+                "all_day": all_day,
+                "title": str(event.get("SUMMARY", "(no title)")).strip(),
+                "location": str(event.get("LOCATION", "")).strip(),
+                "calendar": entry["name"],
+            })
+        return found
+
+    def unreadable_note(self):
+        """'(I couldn't read Work right now.)' after an events() call that skipped some."""
+        if not self.unreadable:
+            return ""
+        return f"(I couldn't read {' and '.join(self.unreadable)} right now.)"
 
     def day(self, day):
         start = datetime.combine(day, datetime.min.time())

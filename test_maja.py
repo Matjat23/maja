@@ -650,6 +650,69 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(describe_event(event, with_day=True, show_calendar=True, today=date(2026, 11, 20)),
                          "ongoing until Fri 04 Dec: Exchange applications open [Studies]")
 
+    def write_calendar(self, file_name, name, summary="Morning run"):
+        path = Path(self.temporary.name) / file_name
+        path.write_bytes("\r\n".join([
+            "BEGIN:VCALENDAR", "VERSION:2.0", f"X-WR-CALNAME:{name}", "BEGIN:VEVENT",
+            "UID:run@test", "DTSTAMP:20261001T000000Z", "DTSTART:20261019T070000",
+            "DTEND:20261019T080000", f"SUMMARY:{summary}", "END:VEVENT", "END:VCALENDAR", "",
+        ]).encode())
+        return path
+
+    def test_a_calendar_named_after_its_link_gets_a_plain_name(self):
+        named = self.write_calendar("named.ics", "https://example.invalid/feed?token=SECRET")
+        self.assertIn("Connected 'Calendar 1'", self.maja.reply(f"calendar {named}"))
+
+    def test_any_link_after_the_word_calendar_is_kept_secret(self):
+        link = "https://example.invalid/feed?token=SECRET"
+        with mock.patch.object(Agenda, "connect", return_value="Work") as connect, \
+                mock.patch.object(Agenda, "events", return_value=[]):
+            self.assertIn("Connected 'Work'", self.maja.reply(f"calendar: {link}"))
+            connect.assert_called_with(link)
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.maja.history, [])
+
+    def test_a_connected_link_is_never_sent_anywhere(self):
+        link = "https://example.invalid/feed?token=SECRET"
+        self.maja.change_setting("calendars", [{"name": "Work", "url": link}])
+        self.assertEqual(self.maja.calendar_link_in(f"is this right? {link}"), link)
+        with mock.patch.object(Agenda, "connect", return_value="Work"), \
+                mock.patch.object(Agenda, "events", return_value=[]):
+            self.maja.reply(f"is this right? {link}")
+            self.maja.reply_about_photo(f"what is this {link}", "photo")
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.maja.history, [])
+        self.assertIsNone(self.maja.calendar_link_in("look at https://example.com/news"))
+
+    def test_a_calendar_that_cannot_be_read_is_mentioned(self):
+        work = self.write_calendar("work.ics", "Work", summary="Standup")
+        self.maja.reply(f"calendar {self.SAMPLE}")
+        self.maja.reply(f"calendar {work}")
+        work.unlink()  # Work can't be reached and has a broken offline copy.
+        self.maja.agenda._cache_file(str(work)).write_bytes(b"not a calendar")
+        self.maja.agenda._loaded.clear()
+        text = self.maja.morning_briefing(datetime(2026, 10, 19, 6, 0))
+        self.assertIn("📅 10:00-12:00 Sample lecture", text)
+        self.assertIn("📅 (I couldn't read Work right now.)", text)
+
+    def test_reconnecting_a_calendar_keeps_its_number(self):
+        work = self.write_calendar("work.ics", "Work")
+        self.maja.reply(f"calendar {work}")
+        self.maja.reply(f"calendar {self.SAMPLE}")
+        self.maja.reply(f"calendar {work}")
+        self.assertEqual([c["name"] for c in self.maja.agenda.calendars], ["Work", "Calendar 2"])
+
+    def test_the_old_offline_copy_is_moved_over(self):
+        folder = Path(self.temporary.name)
+        old_cache = folder / "calendar_cache.ics"
+        old_cache.write_bytes(Path(self.SAMPLE).read_bytes())
+        link = "https://example.invalid/old.ics"
+        self.maja.change_setting("calendar_url", link)
+        agenda = Agenda(self.maja, folder / "cache3", old_cache=old_cache)
+        self.assertFalse(old_cache.exists())
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("offline")):
+            self.assertEqual(len(agenda.events(datetime(2026, 10, 19), datetime(2026, 10, 20))), 1)
+
     def test_a_calendar_link_never_reaches_the_ai_or_the_history(self):
         link = "https://calendar.google.com/calendar/ical/someone%40gmail.com/private-abc123/basic.ics"
         with mock.patch.object(Agenda, "connect") as connect, \
