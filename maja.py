@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -130,6 +131,8 @@ def describe_update(report):
 
 class Maja:
     def __init__(self, data_file: Path, brain=None, library=None, cloud=None, agenda=None):
+        # Held while changing and saving data; reentrant so a save inside a change is fine.
+        self.storage_lock = threading.RLock()
         self.data_file = Path(data_file)
         self.data = self._load()
         self.brain = brain
@@ -163,17 +166,21 @@ class Maja:
             ) from exc
 
     def _save(self):
-        self.data_file.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.data_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.data_file)
+        # One save at a time: the window, the phone, reminders and background jobs can all
+        # change Maja's data, and two saves at once could leave a broken file.
+        with self.storage_lock:
+            self.data_file.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.data_file.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self.data_file)
 
     def setting(self, name, default=None):
         return self.data.get("settings", {}).get(name, default)
 
     def change_setting(self, name, value):
-        self.data.setdefault("settings", {})[name] = value
-        self._save()
+        with self.storage_lock:
+            self.data.setdefault("settings", {})[name] = value
+            self._save()
 
     def _add_note(self, note):
         if note.lower().rstrip(".") in (n.lower().rstrip(".") for n in self.data["notes"]):
@@ -253,17 +260,22 @@ class Maja:
         self._save()
         return schedule
 
-    def due_schedules(self, now=None):
-        """Scheduled jobs whose time has come. Each moves on to its next time."""
+    def due_schedules(self, now=None, limit=None):
+        """Scheduled jobs whose time has come, at most `limit` of them. Only the ones that
+        are returned move on to their next time; the others stay due, so a job that has to
+        wait for another one runs right after it instead of being skipped."""
         now = now or datetime.now()
         ready = []
-        for schedule in self.data.get("schedules", []):
-            when = datetime.strptime(schedule["next"], DUE_FORMAT)
-            if when <= now:
-                ready.append(dict(schedule))
-                schedule["next"] = next_due(when, schedule["repeat"], now).strftime(DUE_FORMAT)
-        if ready:
-            self._save()
+        with self.storage_lock:
+            for schedule in self.data.get("schedules", []):
+                if limit is not None and len(ready) >= limit:
+                    break
+                when = datetime.strptime(schedule["next"], DUE_FORMAT)
+                if when <= now:
+                    ready.append(dict(schedule))
+                    schedule["next"] = next_due(when, schedule["repeat"], now).strftime(DUE_FORMAT)
+            if ready:
+                self._save()
         return ready
 
     def reply(self, message: str, on_text=None) -> str:

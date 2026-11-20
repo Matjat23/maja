@@ -7,6 +7,7 @@ anymore are given to the model, with their dates. Everything stays on this compu
 """
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -23,22 +24,32 @@ class Memory:
         self.archive_file = Path(archive_file)
         self._library = library
         self._chats = library.collection("maja-chats")
+        self._lock = threading.Lock()
+        # Goes up with every 'forget chats'. Work that started before (like filling the
+        # memory at startup) passes the number it started with and is dropped if it changed,
+        # so forgotten conversations can't come back.
+        self.generation = 0
 
     def count(self):
         return self._chats.count()
 
-    def remember(self, question, answer, when=None):
+    def remember(self, question, answer, when=None, generation=None):
         when = when or datetime.now()
         record = {"time": f"{when:%Y-%m-%d %H:%M}", "matty": question, "maja": answer}
-        with self.archive_file.open("a", encoding="utf-8") as archive:
-            archive.write(json.dumps(record, ensure_ascii=False) + "\n")
         text = f"Matty: {question}\nMaja: {answer}"[:STORED_CHARS]
-        self._chats.add(
-            ids=[f"{when:%Y%m%d%H%M%S%f}-{self._chats.count()}"],
-            embeddings=self.brain.embed([f"search_document: {text}"]),
-            documents=[text],
-            metadatas=[{"time": record["time"], "question": question[:500]}],
-        )
+        embedding = self.brain.embed([f"search_document: {text}"])  # Slow, so outside the lock.
+        with self._lock:
+            if generation is not None and generation != self.generation:
+                return False
+            with self.archive_file.open("a", encoding="utf-8") as archive:
+                archive.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._chats.add(
+                ids=[f"{when:%Y%m%d%H%M%S%f}-{self._chats.count()}"],
+                embeddings=embedding,
+                documents=[text],
+                metadatas=[{"time": record["time"], "question": question[:500]}],
+            )
+        return True
 
     def recall(self, message, skip_questions=(), results=3):
         """Older conversations related to the message, oldest first. Conversations whose
@@ -55,6 +66,8 @@ class Memory:
         return sorted(hits, key=lambda hit: hit["time"])
 
     def forget_everything(self):
-        self._library._client.delete_collection("maja-chats")
-        self._chats = self._library.collection("maja-chats")
-        self.archive_file.unlink(missing_ok=True)
+        with self._lock:
+            self.generation += 1
+            self._library._client.delete_collection("maja-chats")
+            self._chats = self._library.collection("maja-chats")
+            self.archive_file.unlink(missing_ok=True)

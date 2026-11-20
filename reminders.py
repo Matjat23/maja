@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 DUE_FORMAT = "%Y-%m-%d %H:%M"
 
@@ -25,25 +25,75 @@ _NUMBER_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "fi
 _IN = re.compile(r"\bin (\d+|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty|half an) "
                  r"(minute|min|hour|day)s?\b")
 _AT = re.compile(r"\b(?:at|by) (\d{1,2})(?:[:.](\d{2}))? ?(am|pm|a\.m\.|p\.m\.)?(?!\d)")
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_MONTH = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_DAY_MONTH = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?" + _MONTH + r"(?:,?\s+(\d{4}))?")
+_MONTH_DAY = re.compile(r"\b" + _MONTH + r"\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!:)(?:,?\s+(\d{4}))?")
+_ISO = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+# 15/12, 12/25 or 15/12/2026, and with dots only when there's a year (15.12.2026), because
+# "18.30" is a time and "3.5 hours" isn't a date. Never right after "at" or "by" (a time).
+_NUMERIC = re.compile(r"(?<!\bat )(?<!\bby )(?<![\d:.])(?:(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?"
+                      r"|(\d{1,2})\.(\d{1,2})\.(\d{4}))(?![\d:./])")
+
+
+def explicit_date(text, now):
+    """A written date like 'December 15', '15 Dec', '15/12' or '2026-12-15'.
+
+    Returns (date or None, found). found is True when the message contains something that
+    looks like a date, even if it's not a real one ('31/02'), so the caller doesn't fall
+    back to guessing 'today'. Numbers are read day first (15/12), unless only month first
+    makes sense (12/25). A date without a year that has passed means next year.
+    """
+    candidates = []
+    if match := _ISO.search(text):
+        candidates.append((int(match[1]), int(match[2]), int(match[3])))
+    elif match := _DAY_MONTH.search(text):
+        candidates.append((match[3] and int(match[3]), MONTHS.index(match[2]) + 1, int(match[1])))
+    elif match := _MONTH_DAY.search(text):
+        candidates.append((match[3] and int(match[3]), MONTHS.index(match[1]) + 1, int(match[2])))
+    elif match := _NUMERIC.search(text):
+        parts = match.groups()[:3] if match[1] else match.groups()[3:]
+        first, second = int(parts[0]), int(parts[1])
+        year = parts[2] and int(parts[2]) + (2000 if len(parts[2]) == 2 else 0)
+        day_first, month_first = (first, second), (second, first)
+        day, month = day_first if second <= 12 else month_first
+        candidates.append((year, month, day))
+    if not candidates:
+        return None, False
+    year, month, day = candidates[0]
+    try:
+        found = date(year or now.year, month, day)
+        if not year and found < now.date():
+            found = date(now.year + 1, month, day)
+    except ValueError:
+        return None, True
+    return found, True
 
 
 def guess_due(message, now=None):
     """Find a reminder time in plain English, like 'in 2 hours', 'at 7am', 'tomorrow',
-    or 'Friday at 18:30'. Returns a datetime in the future, or None.
+    'December 15 at 3pm' or 'Friday at 18:30'. Returns a datetime in the future, or None.
 
-    This backs up the AI model, which is unreliable at this kind of date math.
+    This backs up the AI model, which is unreliable at this kind of date math. When the
+    message has a date it can't read, it returns None instead of guessing a wrong day.
     """
     now = (now or datetime.now()).replace(second=0, microsecond=0)
     text = message.lower()
 
     day = None
+    weekday = False  # "Friday" on a Friday means today if the time hasn't passed, else next week.
     relative = _IN.search(text)
+    written, has_date = explicit_date(text, now)
     if relative:
         amount = _NUMBER_WORDS.get(relative.group(1)) or int(relative.group(1))
         if relative.group(2) != "day":
             unit = "minutes" if relative.group(2) in {"minute", "min"} else "hours"
             return now + timedelta(**{unit: amount})
         day = now.date() + timedelta(days=int(amount))  # "In 3 days": the time is read below.
+    elif has_date:
+        if written is None:
+            return None  # Something like "31/02": better no guess than a wrong one.
+        day = written
     elif re.search(r"\b(today|tonight)\b", text):
         day = now.date()
     elif re.search(r"\btomorrow\b", text):
@@ -51,7 +101,8 @@ def guess_due(message, now=None):
     else:
         for number, name in enumerate(WEEKDAYS):
             if re.search(rf"\b{name}\b", text):
-                day = now.date() + timedelta(days=(number - now.weekday() - 1) % 7 + 1)
+                day = now.date() + timedelta(days=(number - now.weekday()) % 7)
+                weekday = True
                 break
 
     time = None
@@ -83,6 +134,8 @@ def guess_due(message, now=None):
         if datetime.combine(day, datetime.min.time()).replace(hour=time[0], minute=time[1]) <= now:
             day += timedelta(days=1)
     due = datetime.combine(day, datetime.min.time()).replace(hour=time[0], minute=time[1])
+    if weekday and due <= now:
+        due += timedelta(days=7)
     return due if due > now else None
 
 

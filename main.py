@@ -132,13 +132,14 @@ def main():
                      font=("Segoe UI", 11), relief="flat")
     entry.pack(side="left", fill="x", expand=True, ipady=11)
 
-    def insert_formatted(text, tag=None):
-        """Insert text at the end, showing Maja's Markdown as real formatting."""
+    def insert_formatted(text, tag=None, index="end"):
+        """Insert text (at the end, or at a mark that moves along), showing Maja's Markdown
+        as real formatting."""
         if tag != "maja":
-            conversation.insert("end", text, tag)
+            conversation.insert(index, text, tag)
             return
         for piece, styles in markdown_runs(text):
-            conversation.insert("end", piece, ("maja", *styles))
+            conversation.insert(index, piece, ("maja", *styles))
 
     def append(speaker_name, text, tag=None):
         conversation.configure(state="normal")
@@ -158,9 +159,11 @@ def main():
         if speak_replies():
             speaker.speak(text)
 
-    # While the model writes, its words are added to one "Maja: ..." line as they arrive,
-    # and with a neural voice each finished sentence is already spoken. When the reply is
-    # done, the line is replaced by the full reply (with receipts).
+    # While the model writes, its words are added to one "Maja: ..." message as they arrive,
+    # and with a neural voice each finished sentence is already spoken. The message lives
+    # between two marks, reply_start and reply_end, so other messages that arrive meanwhile
+    # (a reminder, a finished job) go after it and are never touched. When the reply is
+    # done, only the text between the marks is replaced by the full reply with receipts.
     streaming = False
     streamed = ""
 
@@ -170,9 +173,12 @@ def main():
         if not streaming:
             streaming, streamed = True, ""
             conversation.insert("end", "Maja: ", "maja")
-            conversation.mark_set("reply_start", "end-1c")
-            conversation.mark_gravity("reply_start", "left")
-        conversation.insert("end", piece, "maja")
+            conversation.insert("end", "\n\n")
+            conversation.mark_set("reply_start", "end-3c")
+            conversation.mark_gravity("reply_start", "left")   # Stays before the reply.
+            conversation.mark_set("reply_end", "end-3c")
+            conversation.mark_gravity("reply_end", "right")    # Moves along as words are added.
+        conversation.insert("reply_end", piece, "maja")
         conversation.configure(state="disabled")
         conversation.see("end")
         streamed += piece
@@ -186,8 +192,8 @@ def main():
             return
         streaming = False
         conversation.configure(state="normal")
-        conversation.delete("reply_start", "end-1c")
-        insert_formatted(f"{text}\n\n", "maja")
+        conversation.delete("reply_start", "reply_end")
+        insert_formatted(text, "maja", index="reply_end")
         conversation.configure(state="disabled")
         conversation.see("end")
         if speak_replies():
@@ -238,6 +244,10 @@ def main():
         if command.lower() in {"voice", "voices"}:
             append("You", message)
             change_voice(name.strip())
+            return
+        if message.lower() in {"new phone key", "change phone key"}:
+            append("You", message)
+            renew_phone_key()
             return
         job = JOB_PREFIX.match(message)
         if job or message.lower() == "open last job":
@@ -508,6 +518,16 @@ def main():
                  "networks.\nThe link contains your secret key, so don't share it.",
                  font=("Segoe UI", 9), bg=BG, fg=WHITE, justify="center").pack(padx=20, pady=12)
 
+    def renew_phone_key():
+        """A new secret key: phones with the old link (or anyone who saw it) are locked out."""
+        maja.change_setting("phone_key", new_key())
+        if phone is not None:
+            toggle_phone()  # Off...
+            toggle_phone()  # ...and on again with the new key, which shows a new QR code.
+            maja_says("🔑 New phone key! Scan the new QR code on your phone; the old link no longer works.")
+        else:
+            maja_says("🔑 New phone key! Old phone links no longer work. Turn on 📱 to get the new QR code.")
+
     def toggle_phone():
         nonlocal phone
         if not SERVER_AVAILABLE or qrcode is None:
@@ -689,13 +709,10 @@ def main():
         if not busy and maja.briefing_due():
             show_briefing()
         if not jobs.running:
-            # One job at a time; if several are due at once, the others wait for their next time.
-            for number, schedule in enumerate(maja.due_schedules()):
-                if number == 0:
-                    start_job(schedule["task"], scheduled=True)
-                else:
-                    maja_says(f"🔁 I skipped '{schedule['task']}' this time, because another "
-                              "scheduled job was running.")
+            # One job at a time. Others that are due stay due and start one by one, each
+            # as soon as the job before it is done.
+            for schedule in maja.due_schedules(limit=1):
+                start_job(schedule["task"], scheduled=True)
         if task_panel.winfo_ismapped():
             refresh_tasks()  # Reminders and scheduled jobs move tasks on.
         root.after(REMINDER_CHECK_MS, check_reminders)
@@ -752,11 +769,14 @@ def main():
         # The first time, the recent chat (from before long-term memory existed) is saved.
         if maja.memory is None or maja.memory.count() > 0:
             return
+        generation = maja.memory.generation  # Stops if Matty says 'forget chats' meanwhile.
         history = list(maja.history)
         for question, answer in zip(history, history[1:]):
             if question["role"] == "user" and answer["role"] == "assistant":
                 try:
-                    maja.memory.remember(question["content"], answer["content"])
+                    if not maja.memory.remember(question["content"], answer["content"],
+                                                generation=generation):
+                        return
                 except Exception:
                     return  # Not important enough to bother Matty about.
 

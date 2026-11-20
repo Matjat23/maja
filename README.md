@@ -42,7 +42,7 @@ For long-term memory, every question and answer is saved in `chat_archive.jsonl`
 
 Questions that only ask for information ("explain...", "what is...") skip the save step completely. The model sometimes turned them into tasks or notes, and a simple rule in code is more reliable than more examples in the prompt.
 
-Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8"), with the model as a fallback, because the model got date math wrong too often.
+Dates are parsed in plain Python first ("in 2 hours", "tomorrow at 8", "December 15 at 3pm", "15/12"), with the model as a fallback, because the model got date math wrong too often.
 
 For documents I use RAG. Files are split into chunks of about 1,000 characters, turned into embeddings with `nomic-embed-text` and stored in ChromaDB. For each question the closest chunks are given to the model. I measured the cut-off on test questions: questions about the documents had a cosine distance of 0.16 to 0.43 and normal chat 0.41 to 0.55, so chunks up to 0.45 are used and a source is only listed if it's a clear match (0.40) or the answer mentions it.
 
@@ -142,7 +142,7 @@ The buttons next to the text box:
 - **Folder**: opens the documents folder. Put PDFs, .txt or .md files there and type `update documents`.
 - **Camera**: turns the webcam on with a live preview. While it's on, the next message is about the picture, for example "What am I holding?". Photos are never saved.
 - **Tasks**: shows or hides the task panel on the right, where open tasks and scheduled jobs can be ticked off or deleted with the mouse. It runs the same commands as typing them.
-- **Phone**: starts a small web server and shows a QR code. Scan it with a phone on the same Wi-Fi. The link contains a secret key and the server refuses requests without it. It's plain HTTP, so only use it on a network you trust.
+- **Phone**: starts a small web server and shows a QR code. Scan it with a phone on the same Wi-Fi. The link contains a secret key and the server refuses requests without it. `new phone key` makes a new one, so old links stop working. It's plain HTTP, so only use it on a network you trust.
 
 Things to try:
 

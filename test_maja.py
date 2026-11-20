@@ -271,6 +271,28 @@ class ReminderTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertIsNone(guess_due(message, now))
 
+    def test_guess_due_reads_written_dates(self):
+        now = datetime(2026, 11, 20, 12, 0)  # A Friday at noon.
+        cases = {
+            "dentist on December 15 at 3pm": datetime(2026, 12, 15, 15, 0),
+            "call mom on Dec 3": datetime(2026, 12, 3, 9, 0),
+            "15th of January": datetime(2027, 1, 15, 9, 0),  # Already passed this year.
+            "exam on 18/12 at 9": datetime(2026, 12, 18, 9, 0),  # Day first.
+            "party 12/25 at 8pm": datetime(2026, 12, 25, 20, 0),  # Only month first makes sense.
+            "deadline 18.12.2026 at 10": datetime(2026, 12, 18, 10, 0),
+            "2027-01-05 at 10:00": datetime(2027, 1, 5, 10, 0),
+            "Friday at 3pm": datetime(2026, 11, 20, 15, 0),  # Today, the time hasn't passed.
+            "Friday at 9am": datetime(2026, 11, 27, 9, 0),  # Passed, so next week.
+            "meeting at 18.30": datetime(2026, 11, 20, 18, 30),  # A time, not a date.
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(guess_due(message, now), expected)
+        # A date it can't read gives no guess, instead of silently meaning today.
+        for message in ["on 31/02", "the 3.5 hour exam"]:
+            with self.subTest(message=message):
+                self.assertIsNone(guess_due(message, now))
+
 
 class AutostartTests(unittest.TestCase):
     def test_start_with_windows_commands(self):
@@ -530,6 +552,17 @@ class CloudTests(unittest.TestCase):
         self.assertIn("You are Maja", request["system"])
         self.assertEqual(request["tools"], [])
         self.assertEqual(request["fallbacks"], "default")
+
+    @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
+    def test_answers_are_limited_to_what_the_budget_can_pay_for(self):
+        month = f"{datetime.now():%Y-%m}"
+        self.maja.change_setting("cloud_budget", 1.0)
+        self.maja.change_setting("cloud_spend", {month: 0.90})  # $0.10 left: at most ~5,000 tokens.
+        self.maja.reply("think: explain Amdahl's law")
+        self.assertLess(self.requests[0]["max_tokens"], 5000)
+        self.maja.change_setting("cloud_spend", {month: 0.995})  # Half a cent left: nothing is sent.
+        self.assertIn("too little left", self.maja.reply("think: anything"))
+        self.assertEqual(len(self.requests), 1)
 
     @unittest.skipUnless(CLOUD_AVAILABLE, "needs the anthropic package")
     def test_search_turns_on_web_search(self):
@@ -819,6 +852,14 @@ class RepeatTests(unittest.TestCase):
         self.assertEqual([s["task"] for s in ready], ["plan my week"])
         self.assertEqual(self.maja.data["schedules"][0]["next"], "2026-11-02 08:00")
         self.assertIn("Deleted: plan my week", self.maja.reply("delete schedule 1"))
+        # Two jobs due at the same time: the second waits for the first instead of being skipped.
+        self.maja.add_schedule("job A", "weekly", first)
+        self.maja.add_schedule("job B", "weekly", first)
+        monday = datetime(2026, 10, 26, 8, 0)
+        self.assertEqual([s["task"] for s in self.maja.due_schedules(monday, limit=1)], ["job A"])
+        self.assertEqual([s["task"] for s in self.maja.due_schedules(monday + timedelta(minutes=5), limit=1)],
+                         ["job B"])
+        self.assertEqual(self.maja.due_schedules(monday + timedelta(minutes=10), limit=1), [])
         self.maja.reply("add task Old task")
         self.assertIn("Deleted: Old task", self.maja.reply("delete task 1"))
         self.assertIn("Use a number", self.maja.reply("delete task 5"))
@@ -859,9 +900,26 @@ class MemoryTests(unittest.TestCase):
         maja.reply("What was my thesis topic about warehouse robot path planning?")
         self.assertIn("[2026-09-01 10:00]", self.brain.calls[-1][0]["content"])
         self.assertEqual(self.memory.count(), 2)  # The new exchange was stored too.
+        started = self.memory.generation  # Like the startup filling, which began earlier.
         self.assertIn("forgotten", maja.reply("forget chats"))
         self.assertEqual(self.memory.count(), 0)
         self.assertFalse(self.archive.exists())
+        # Work that started before 'forget chats' can't bring old conversations back.
+        self.assertFalse(self.memory.remember("old question", "old answer", generation=started))
+        self.assertEqual(self.memory.count(), 0)
+
+    def test_a_document_stays_searchable_when_the_model_is_down(self):
+        folder = Path(self.temporary.name)
+        documents = folder / "documents"
+        (documents / "notes.md").write_text("MPI processes exchange messages.", encoding="utf-8")
+        library = Library(documents, folder / "database", self.brain)
+        library.update()
+        (documents / "notes.md").write_text("MPI processes exchange many messages now.", encoding="utf-8")
+        self.brain.embed = mock.Mock(side_effect=BrainError("I can't reach Ollama."))
+        with self.assertRaises(BrainError):
+            library.update()
+        self.brain.embed = FakeBrain().embed
+        self.assertEqual(library.search("MPI processes exchange messages")[0]["source"], "notes.md")
 
 
 class PhotoTests(unittest.TestCase):

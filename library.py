@@ -12,6 +12,7 @@ Everything stays on this computer. Needs the packages in requirements.txt.
 """
 
 import json
+import threading
 from pathlib import Path
 
 try:
@@ -89,6 +90,7 @@ class Library:
             "maja-documents", metadata={"hnsw:space": "cosine"})
         # Remembers each file's size and change time, so unchanged files aren't re-read.
         self._index_file = database_folder / "files.json"
+        self._updating = threading.Lock()
         self._files = json.loads(self._index_file.read_text(encoding="utf-8")) if self._index_file.exists() else {}
 
     def collection(self, name):
@@ -110,6 +112,10 @@ class Library:
 
         Returns {'added': [...], 'updated': [...], 'removed': [...], 'problems': [...]}.
         """
+        with self._updating:  # Startup and 'update documents' can't run at the same time.
+            return self._update()
+
+    def _update(self):
         report = {"added": [], "updated": [], "removed": [], "problems": []}
         found = self._scan()
         for source in [s for s in self._files if s not in found]:
@@ -128,18 +134,26 @@ class Library:
                 continue
             report["updated" if source in self._files else "added"].append(source)
             self._files[source] = fingerprint
-        self._index_file.write_text(json.dumps(self._files, indent=2), encoding="utf-8")
+        # Written to a temporary file first, so an interrupted save can't leave a broken index.
+        temporary = self._index_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self._files, indent=2), encoding="utf-8")
+        temporary.replace(self._index_file)
         return report
 
     def _add(self, source, path):
         pieces = [(page, chunk) for page, text in read_document(path) for chunk in split_into_chunks(text)]
+        # All embeddings are made before the old version is removed, so if the model isn't
+        # running, the document stays searchable as it was instead of disappearing.
+        embeddings = []
+        for start in range(0, len(pieces), EMBED_BATCH):
+            batch = pieces[start:start + EMBED_BATCH]
+            embeddings += self.brain.embed([f"search_document: {chunk}" for _, chunk in batch])
         self._chunks.delete(where={"source": source})
         for start in range(0, len(pieces), EMBED_BATCH):
             batch = pieces[start:start + EMBED_BATCH]
-            embeddings = self.brain.embed([f"search_document: {chunk}" for _, chunk in batch])
             self._chunks.add(
                 ids=[f"{source}#{start + i}" for i in range(len(batch))],
-                embeddings=embeddings,
+                embeddings=embeddings[start:start + EMBED_BATCH],
                 documents=[chunk for _, chunk in batch],
                 metadatas=[{"source": source, "page": page or 0} for page, _ in batch],
             )

@@ -9,6 +9,7 @@ matching document excerpts) and the recent chat. Needs the anthropic package and
 key in the ANTHROPIC_API_KEY environment variable.
 """
 
+import contextlib
 import os
 from datetime import datetime
 
@@ -61,9 +62,22 @@ class CloudBrain:
 
     def _record(self, cost, now=None):
         month = f"{now or datetime.now():%Y-%m}"
-        spend = dict(self.settings.setting("cloud_spend", {}))
-        spend[month] = round(spend.get(month, 0.0) + cost, 6)
-        self.settings.change_setting("cloud_spend", spend)
+        # Read and write in one step, so a chat and a background job can't overwrite
+        # each other's spending.
+        with getattr(self.settings, "storage_lock", contextlib.nullcontext()):
+            spend = dict(self.settings.setting("cloud_spend", {}))
+            spend[month] = round(spend.get(month, 0.0) + cost, 6)
+            self.settings.change_setting("cloud_spend", spend)
+
+    def _answer_allowance(self, system, conversation, web):
+        """The most output tokens the rest of this month's budget can pay for (at most
+        16,000), assuming the whole input is paid for and every allowed web search is used.
+        So one more request can never go over the budget."""
+        price_in, price_out = PRICES.get(self.model, PRICES[DEFAULT_MODEL])
+        characters = len(system) + sum(len(str(m["content"])) for m in conversation)
+        input_cost = characters / 3 * price_in / 1_000_000  # About 3-4 characters per token.
+        left = self.budget - self.spent_this_month() - input_cost - (3 * WEB_SEARCH_PRICE if web else 0)
+        return min(16000, int(left / price_out * 1_000_000))
 
     @property
     def usable(self):
@@ -95,10 +109,19 @@ class CloudBrain:
         self.last_cost = 0.0
         try:
             # A server-side web search can pause a long turn; it's continued up to 3 times.
-            for _ in range(4):
+            for round_ in range(4):
+                allowance = self._answer_allowance(system, conversation, web)
+                if allowance < 500:
+                    if round_ == 0:
+                        raise BrainError(
+                            f"There's too little left of this month's cloud budget "
+                            f"(${self.budget:.2f}) for an answer, so I sent nothing. Type 'cloud "
+                            "budget' and a number to change it.")
+                    yield "\n\n(I stopped here because the monthly cloud budget is almost used up.)"
+                    return
                 with self._client.beta.messages.stream(
                     model=self.model,
-                    max_tokens=16000,
+                    max_tokens=allowance,
                     system=system,
                     messages=conversation,
                     tools=tools,
