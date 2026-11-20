@@ -74,10 +74,10 @@ def main():
         if library is not None:
             maja.memory = Memory(library, brain, DATA / "chat_archive.jsonl")
         if AGENDA_AVAILABLE:
-            maja.agenda = Agenda(maja, DATA / "calendar_cache.ics")
+            maja.agenda = Agenda(maja, DATA / "calendar_cache")
             sample = HERE / "demo_documents" / "sample-calendar.ics"
             if DEMO and not maja.agenda.url and sample.exists():
-                maja.change_setting("calendar_url", str(sample))
+                maja.change_setting("calendars", [{"name": "Sample calendar", "url": str(sample)}])
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()

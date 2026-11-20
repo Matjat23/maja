@@ -105,7 +105,7 @@ def task_label(task):
 # A calendar's private ICS link (Google, Outlook, TimeEdit), and the ways people spell the
 # command word, so a typo like "calender <link>" still connects the calendar.
 CALENDAR_LINK = re.compile(r"(?:https?|webcal)://\S*(?:/ical/|\.ics)\S*", re.IGNORECASE)
-CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal"}
+CALENDAR_WORDS = {"calendar", "calender", "calandar", "kalender", "cal", "calendars", "calenders"}
 
 # Messages starting like this go to Claude. Short words need a colon ("think: ..."), so an
 # ordinary sentence like "Think about it" never costs money by accident.
@@ -409,6 +409,8 @@ class Maja:
         command, _, argument = message.partition(" ")
         is_calendar_word = command.lower().rstrip(":") in CALENDAR_WORDS
         if is_calendar_word or lower in {"my calendar", "what's on my calendar?", "what's on my calendar"}:
+            if command.lower().rstrip(":") in {"calendars", "calenders"} and not argument.strip():
+                return self._calendar_command("list")
             return self._calendar_command(argument.strip() if is_calendar_word else "")
         if lower.startswith("cloud budget"):
             return self._cloud_budget(lower[len("cloud budget"):].strip(" $"))
@@ -467,23 +469,45 @@ class Maja:
         if self.agenda is None:
             return ("Reading a calendar needs extra packages. In a terminal, run: "
                     "py -m pip install -r requirements.txt, then restart me.")
+        words = argument.lower().split()
         try:
-            if argument.lower() == "off":
-                self.agenda.disconnect()
-                return "Okay, I've disconnected your calendar."
+            if words in (["off"], ["remove", "all"]):
+                removed = self.agenda.disconnect()
+                return f"Okay, I've disconnected {len(removed)} calendar(s)."
+            if len(words) == 2 and words[0] == "remove" and words[1].isdigit():
+                removed = self.agenda.disconnect(int(words[1]))
+                if not removed:
+                    return "Use a number from 'calendars', for example 'calendar remove 2'."
+                return f"Okay, I've disconnected '{removed[0]['name']}'."
+            if words in (["list"], ["s"]):
+                return self._calendar_list()
             if argument:
-                self.agenda.connect(argument)
-                return "Your calendar is connected! 📅 Here's what's coming up:\n" + self._week_ahead()
+                name = self.agenda.connect(argument)
+                count = len(self.agenda.calendars)
+                more = (f" You now have {count} calendars connected; paste another link to add "
+                        "more." if count > 1 else " Paste another calendar's link to add it too.")
+                return (f"Connected '{name}'! 📅{more} Here's what's coming up:\n" + self._week_ahead())
             return self._week_ahead()
         except AgendaError as error:
             return str(error)
+
+    def _calendar_list(self):
+        calendars = self.agenda.calendars
+        if not calendars:
+            return "No calendars connected yet. Paste a calendar's private ICS link to add one."
+        return ("Connected calendars:\n" + "\n".join(f"{i}. 📅 {c['name']}" for i, c in enumerate(calendars, 1))
+                + "\nPaste another link to add one, or 'calendar remove 2' to remove one.")
+
+    def _describe(self, event, with_day=False):
+        """An event, with its calendar's name when there's more than one calendar."""
+        return describe_event(event, with_day=with_day, show_calendar=len(self.agenda.calendars) > 1)
 
     def _week_ahead(self, now=None):
         now = now or datetime.now()
         events = self.agenda.events(now, now + timedelta(days=7))
         if not events:
-            return "Nothing on your calendar for the next 7 days."
-        return "\n".join(f"📅 {describe_event(event, with_day=True)}" for event in events)
+            return "Nothing on your calendars for the next 7 days."
+        return "\n".join(f"📅 {self._describe(event, with_day=True)}" for event in events)
 
     def _calendar_for_prompt(self):
         """The next 7 days of the calendar, for Maja's instructions ('' if there's none)."""
@@ -491,10 +515,10 @@ class Maja:
             return ""
         try:
             now = datetime.now()
-            events = self.agenda.events(now, now + timedelta(days=7))[:25]
+            events = self.agenda.events(now, now + timedelta(days=7))[:40]
         except AgendaError:
             return ""
-        lines = "\n".join(f"- {describe_event(event, with_day=True)}" for event in events) or "(nothing)"
+        lines = "\n".join(f"- {self._describe(event, with_day=True)}" for event in events) or "(nothing)"
         return f"\nMatty's calendar for the next 7 days:\n{lines}"
 
     def _cloud_budget(self, amount):
@@ -536,7 +560,7 @@ class Maja:
         lines = [f"Today, {now:%A %d %B}:"]
         if self.agenda is not None and self.agenda.url:
             try:
-                lines += [f"📅 {describe_event(event)}" for event in self.agenda.day(today)]
+                lines += [f"📅 {self._describe(event)}" for event in self.agenda.day(today)]
             except AgendaError:
                 lines.append("📅 (I couldn't read your calendar right now.)")
         lines += [f"⏰ {due(task):%H:%M} {task['text']}" for task in due_today]

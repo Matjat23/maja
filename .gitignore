@@ -24,3 +24,6 @@ chat_archive.jsonl
 
 # Calendar event files Maja opens in the calendar app
 actions/
+
+# Downloaded copies of my calendars
+calendar_cache/
