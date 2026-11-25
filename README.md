@@ -27,6 +27,7 @@ The project is still in progress. The long-term goal is a small physical robot v
 - Add events to my calendar and draft emails, but only after I say yes, and I still save or send them myself
 - Hand hard questions to Claude when I ask for it, optionally with a web search, with a monthly spending limit
 - Work on bigger tasks in the background ("job: make me a study plan for the exam") and save a report
+- Decide herself what to look up in my documents, calendar and tasks before she answers ("research: when is my lab due and when can I work on it?")
 
 ## How it works
 
@@ -56,6 +57,7 @@ main.py (window)          server.py (phone)
           |-- agenda.py     calendar (ICS link, read-only)
           |-- cloud.py      Claude for think: and search:
           |-- jobs.py       background jobs: plan, research, write, review
+          |-- agent.py      the loop where she picks what to look up (read-only tools)
           |-- memory.py     long-term memory of all conversations
           |-- actions.py    calendar events and email drafts (after a yes)
           |-- markdown.py   formatting in the chat window
@@ -116,11 +118,19 @@ A link works like a password for reading the calendar, so links are only stored 
 
 ## Jobs
 
-A message that starts with `job:` (or `work on:`) is a bigger task that Maja works on in the background while I keep chatting. It goes through four roles, based on my separate agent team: a planner, a researcher (who also gets matching excerpts from my documents, and web search when Claude is used), a writer and a reviewer. If the reviewer finds problems, the writer fixes them once and the reviewer checks again, so it can't loop forever. When it's done, Maja shows the start of the result, sends a notification and saves a report with every step in `jobs/`. `open last job` opens it.
+A message that starts with `job:` (or `work on:`) is a bigger task that Maja works on in the background while I keep chatting. It goes through four roles, based on my separate agent team: a planner, a researcher (who gets what Maja looked up in my documents, calendar and tasks, see below, and web search when Claude is used), a writer and a reviewer. If the reviewer finds problems, the writer fixes them once and the reviewer checks again, so it can't loop forever. When it's done, Maja shows the start of the result, sends a notification and saves a report with every step in `jobs/`. `open last job` opens it.
 
 A job that starts with a repeat phrase, like `job: every Monday at 8, plan my week`, is scheduled instead of run right away, and Maja starts it on her own at those times while she's running. `schedules` lists them and `delete schedule 1` removes one.
 
 Jobs use Claude when an API key and budget are available, and the local model otherwise. A local job with the sample lecture notes (a 5-day study plan) took about 75 seconds.
+
+## Looking things up herself
+
+A message that starts with `research:` (or `look into:` / `find out:`) makes Maja work like an agent. The model gets the goal and four tools: search my documents, read the calendar for any dates, list my open tasks, and done. Each round it picks one tool, Python checks the choice and runs it, and the result goes back to the model so it can pick the next step. When it has enough, it answers from what it found and the reply ends with what it looked up. Jobs use the same loop after the planner, and the reviewer gets the same evidence, so it can catch dates or facts the evidence doesn't back up.
+
+The tools only read. Nothing in the loop can change a file, the calendar or the task list; calendar events and emails still go through the preview and `yes` described below. Everything a tool returns is passed on as data, and the model is told never to follow instructions inside it. Because a small local model sometimes picks wrong, Python refuses unknown tools, empty searches and impossible dates, stops after two refused choices in a row, and ends the loop when a call is repeated, when a search gives the same results as before, or after 5 lookups.
+
+I tested how llama3.1 chooses with 10 questions on test data. It picked the right first tool 10 out of 10 times, and needed 1.8 lookups on average (about 3 seconds per question). The first version kept looking things up until the limit; asking the model "is the goal covered?" before every choice and requiring every field in the JSON fixed that.
 
 ## Calendar events and email drafts
 
@@ -158,6 +168,7 @@ Things to try:
 - `voice` to list the installed voices, `voice amy` to switch
 - `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`
 - `job: make me a 5-day study plan for my exam using my lecture notes`, then `open last job`
+- `research: what do I have this week and what should I prepare?`
 
 Settings through environment variables: `MAJA_MODEL`, `MAJA_VISION_MODEL`, `MAJA_EMBED_MODEL`, `MAJA_WHISPER_MODEL` (for example `small` for better speech recognition), `MAJA_VOICE` (default voice) and `MAJA_CAMERA` (camera number).
 
@@ -177,4 +188,5 @@ The tests use fake models, so they don't need Ollama. The document, phone and ca
 - [x] Cloud brain, calendar, background jobs
 - [x] Formatting, repeating reminders, scheduled jobs, long-term memory, calendar events and email drafts
 - [x] Task panel, desktop app, phone through Tailscale, face page and state endpoint for a robot
+- [x] Several calendars, today's events in the panel, an agent loop with read-only tools
 - [ ] Robot version: a moving head (ESP32 + servos), then a printed case designed in CAD

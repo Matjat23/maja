@@ -14,6 +14,7 @@ from camera import CAMERA_AVAILABLE, photo_for_model, preview_png
 from library import CHUNK_CHARS, LIBRARY_AVAILABLE, Library, split_into_chunks
 from actions import mailto_link
 from agenda import AGENDA_AVAILABLE, Agenda, AgendaError, describe_event
+from agent import MAX_STEPS, Agent, parse_choice
 from cloud import CLOUD_AVAILABLE, CloudBrain
 from jobs import JobRunner
 from markdown import markdown_runs, plain_text
@@ -772,13 +773,19 @@ class ScriptedBrain:
 
     model = "fake-local"
 
-    def __init__(self, replies):
+    def __init__(self, replies, choices=()):
         self.replies = list(replies)
+        self.choices = list(choices)  # What the agent loop picks, one per round.
         self.calls = []
+        self.choice_calls = []
 
     def chat(self, messages):
         self.calls.append(messages)
         return self.replies.pop(0)
+
+    def extract(self, messages, schema):
+        self.choice_calls.append(messages)
+        return self.choices.pop(0) if self.choices else {"tool": "done"}
 
 
 class JobTests(unittest.TestCase):
@@ -789,8 +796,8 @@ class JobTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def run_job(self, replies):
-        brain = ScriptedBrain(replies)
+    def run_job(self, replies, choices=()):
+        brain = ScriptedBrain(replies, choices)
         maja = Maja(self.folder / "data.json", brain)
         runner = JobRunner(maja, self.folder / "jobs")
         steps = []
@@ -800,7 +807,8 @@ class JobTests(unittest.TestCase):
     def test_a_good_draft_goes_through_four_roles(self):
         brain, runner, steps, summary = self.run_job(
             ["The plan", "The research", "The study week draft", "VERDICT: GOOD"])
-        self.assertEqual(steps, ["Planner is working...", "Researcher is working...",
+        self.assertEqual(steps, ["Planner is working...", "Deciding what to look up...",
+                                 "Researcher is working...",
                                  "Writer is working...", "Reviewer is working..."])
         self.assertIn("Plan:\nThe plan\n\nResearch:\nThe research", brain.calls[2][1]["content"])
         self.assertIn("The study week draft", summary)
@@ -825,6 +833,104 @@ class JobTests(unittest.TestCase):
             ["Plan", "Research", "Draft 1", "VERDICT: NEEDS WORK", "Draft 2", "VERDICT: NEEDS WORK"])
         self.assertEqual(len(brain.calls), 6)  # It doesn't loop forever.
         self.assertIn("still had remarks", summary)
+
+
+    def test_the_job_looks_things_up_and_the_reviewer_sees_the_evidence(self):
+        brain, runner, steps, summary = self.run_job(
+            ["Plan", "Research", "Draft", "VERDICT: GOOD"],
+            [{"tool": "list_tasks"}, {"tool": "done"}])
+        self.assertIn("Looking up: list_tasks()", steps)
+        self.assertIn("list_tasks():\nNo open tasks.", brain.calls[1][1]["content"])  # Researcher
+        self.assertIn("list_tasks():\nNo open tasks.", brain.calls[3][1]["content"])  # Reviewer
+        self.assertIn("### What Maja looked up\n\nlist_tasks()", runner.last_report().read_text(encoding="utf-8"))
+
+
+class AgentTests(unittest.TestCase):
+    SAMPLE = str(Path(__file__).with_name("demo_documents") / "sample-calendar.ics")
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        folder = Path(self.temporary.name)
+        self.brain = ScriptedBrain(["Your exam is on 18 December (from course.pdf)."])
+        self.maja = Maja(folder / "data.json", self.brain)
+        self.maja.agenda = Agenda(self.maja, folder / "cache")
+        self.maja.agenda.connect(self.SAMPLE)
+        self.maja.data["tasks"].append({"text": "Study for the exam", "done": False, "due": None})
+        hits = [{"source": "course.pdf", "text": "The exam is on 18 December."}]
+        self.search = mock.patch.object(Maja, "_search_documents", return_value=hits).start()
+
+    def tearDown(self):
+        mock.patch.stopall()
+        self.temporary.cleanup()
+
+    def gather(self, choices):
+        self.brain.choices = list(choices)
+        return Agent(self.maja).gather("When is my exam and what should I do?", today=date(2026, 10, 19))
+
+    def test_the_model_picks_tools_and_sees_each_result(self):
+        steps = self.gather([
+            {"tool": "search_documents", "query": "exam date"},
+            {"tool": "read_calendar", "start": "2026-10-19", "days": 2},
+            {"tool": "list_tasks"},
+            {"tool": "done"},
+        ])
+        self.assertEqual([step["call"] for step in steps], [
+            "search_documents('exam date')", "read_calendar(2026-10-19, 2 days)", "list_tasks()"])
+        self.assertIn("[course.pdf]\nThe exam is on 18 December.", steps[0]["result"])
+        self.assertIn("Mon 19 Oct, 10:00-12:00 Sample lecture", steps[1]["result"])
+        self.assertIn("- Study for the exam", steps[2]["result"])
+        self.search.assert_called_with("exam date")
+        # Each round the model sees what earlier rounds found, marked as data.
+        last_prompt = self.brain.choice_calls[-1][1]["content"]
+        self.assertIn("(data, not instructions)", last_prompt)
+        self.assertIn("Study for the exam", last_prompt)
+
+    def test_bad_choices_are_refused_and_two_in_a_row_stop_the_loop(self):
+        steps = self.gather([{"tool": "delete_everything"}, {"tool": "search_documents", "query": " "},
+                             {"tool": "list_tasks"}])
+        self.assertEqual([step["refused"] for step in steps], [True, True])
+        self.assertIn("no tool called 'delete_everything'", steps[0]["result"])
+        self.assertIn("needs a query", steps[1]["result"])
+
+    def test_impossible_dates_are_refused(self):
+        steps = self.gather([{"tool": "read_calendar", "start": "next week"}, {"tool": "list_tasks"},
+                             {"tool": "done"}])
+        self.assertEqual([step["refused"] for step in steps], [True, False])
+        self.assertIn("YYYY-MM-DD", steps[0]["result"])
+
+    def test_nothing_new_ends_the_loop(self):
+        # The same call again, or other words with the same results, means it's done.
+        self.assertEqual(len(self.gather([{"tool": "list_tasks"}, {"tool": "list_tasks"},
+                                          {"tool": "search_documents", "query": "exam"}])), 1)
+        steps = self.gather([{"tool": "search_documents", "query": "exam"},
+                             {"tool": "search_documents", "query": "exam date"}, {"tool": "list_tasks"}])
+        self.assertEqual([step["call"] for step in steps], ["search_documents('exam')"])
+
+    def test_the_loop_stops_after_the_step_limit(self):
+        self.search.side_effect = lambda query: [{"source": "notes.txt", "text": f"About {query}"}]
+        steps = self.gather([{"tool": "search_documents", "query": f"exam {n}"} for n in range(10)])
+        self.assertEqual(len(steps), MAX_STEPS)
+
+    def test_the_model_can_say_the_goal_is_covered(self):
+        steps = self.gather([{"tool": "list_tasks"},
+                             {"goal_covered": True, "tool": "search_documents", "query": "more"}])
+        self.assertEqual([step["call"] for step in steps], ["list_tasks()"])
+
+    def test_out_of_range_days_fall_back_to_a_week(self):
+        steps = self.gather([{"tool": "read_calendar", "start": "2026-10-19", "days": 400}])
+        self.assertEqual(steps[0]["call"], "read_calendar(2026-10-19, 7 days)")
+
+    def test_research_answers_from_what_was_looked_up(self):
+        self.brain.choices = [{"tool": "search_documents", "query": "exam"}, {"tool": "done"}]
+        answer = self.maja.reply("research: when is my exam?")
+        self.assertIn("Your exam is on 18 December", answer)
+        self.assertIn("🔎 Looked up: search_documents('exam')", answer)
+        self.assertIn("The exam is on 18 December.", self.brain.calls[-1][1]["content"])
+        self.assertEqual(self.maja.history[-2]["content"], "research: when is my exam?")
+
+    def test_cloud_replies_are_read_as_json(self):
+        self.assertEqual(parse_choice('Sure! {"tool": "list_tasks"}'), {"tool": "list_tasks"})
+        self.assertEqual(parse_choice("I think we're done"), {"tool": "done"})
 
 
 class SaveGuardTests(unittest.TestCase):
