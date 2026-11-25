@@ -742,7 +742,10 @@ class Maja:
     def _abilities(self):
         """What Maja can do, so she answers questions about herself correctly
         instead of guessing that she's 'just a text-based AI'."""
-        speaking = ("Spoken replies are ON right now, so Matty hears your answers out loud"
+        speaking = ("Spoken replies are ON right now, so Matty hears your answers out loud. "
+                    "The app reads your text out loud by itself: never write stage directions "
+                    "like *speaks loudly*, and if Matty can't hear you, say they can type "
+                    "'speaker' to pick the sound output"
                     if self.setting("speak", False) else
                     "Spoken replies are OFF right now; Matty can turn them on with the 🔊 button")
         seeing = ("The camera is OFF right now, so you can't see anything at the moment; Matty "
