@@ -21,6 +21,7 @@ from markdown import markdown_runs, plain_text
 from memory import Memory
 from maja import Maja, cloud_mode, only_asks_for_information
 from server import SERVER_AVAILABLE, create_app, is_tailscale_address, tailscale_ip
+import voice
 from voice import (VOICE_INPUT_AVAILABLE, Speaker, WakeListener, parse_wake, split_sentences,
                    text_for_speech)
 from reminders import guess_due, guess_repeat, next_due, parse_due
@@ -931,6 +932,29 @@ class AgentTests(unittest.TestCase):
     def test_cloud_replies_are_read_as_json(self):
         self.assertEqual(parse_choice('Sure! {"tool": "list_tasks"}'), {"tool": "list_tasks"})
         self.assertEqual(parse_choice("I think we're done"), {"tool": "done"})
+
+
+class SpeakerOutputTests(unittest.TestCase):
+    DEVICES = [
+        {"name": "Microphone", "max_output_channels": 0, "hostapi": 0},
+        {"name": "Microsoft Sound Mapper - Output", "max_output_channels": 2, "hostapi": 0},
+        {"name": "DELL S2421HN (HD Audio Driver f", "max_output_channels": 2, "hostapi": 0},
+        {"name": "Speakers (Realtek(R) Audio)", "max_output_channels": 2, "hostapi": 0},
+        {"name": "Speakers (Realtek(R) Audio)", "max_output_channels": 2, "hostapi": 1},
+    ]
+
+    def query(self, device=None, kind=None):
+        return self.DEVICES[2] if kind == "output" else self.DEVICES
+
+    @unittest.skipUnless(voice.NEURAL_VOICE_AVAILABLE, "needs sounddevice")
+    def test_maja_finds_the_chosen_output_and_falls_back_to_the_default(self):
+        with mock.patch.object(voice.sd, "query_devices", side_effect=self.query):
+            self.assertEqual(voice.output_devices(), ["DELL S2421HN (HD Audio Driver f",
+                                                      "Speakers (Realtek(R) Audio)"])
+            self.assertEqual(voice.output_index("Speakers (Realtek(R) Audio)"), 3)
+            self.assertEqual(voice.output_index("realtek"), 3)
+            self.assertIsNone(voice.output_index("Headphones"))  # Unplugged: Windows default.
+            self.assertIsNone(voice.output_index(None))
 
 
 class SaveGuardTests(unittest.TestCase):

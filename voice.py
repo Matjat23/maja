@@ -129,6 +129,29 @@ $voice.Speak([Console]::In.ReadToEnd())
 """
 
 
+def output_devices():
+    """Names of the sound outputs Maja can use, like 'Speakers (Realtek(R) Audio)'."""
+    if not NEURAL_VOICE_AVAILABLE:
+        return []
+    default_api = sd.query_devices(kind="output")["hostapi"]
+    return [device["name"] for device in sd.query_devices()
+            if device["max_output_channels"] > 0 and device["hostapi"] == default_api
+            and "Sound Mapper" not in device["name"]]
+
+
+def output_index(name):
+    """The sounddevice number of the output whose name contains this text, or None (then
+    the Windows default is used, for example when the headphones were unplugged)."""
+    if not name or not NEURAL_VOICE_AVAILABLE:
+        return None
+    default_api = sd.query_devices(kind="output")["hostapi"]
+    for index, device in enumerate(sd.query_devices()):
+        if (device["max_output_channels"] > 0 and device["hostapi"] == default_api
+                and name.lower() in device["name"].lower()):
+            return index
+    return None
+
+
 def installed_voices():
     return sorted(path.stem for path in VOICES.glob("*.onnx")) if VOICES.exists() else []
 
@@ -138,8 +161,9 @@ class Speaker:
     as each is ready, so Maja can start talking while the model is still writing.
     Calling stop() (or speak() with new text) interrupts her right away."""
 
-    def __init__(self, voice=None):
+    def __init__(self, voice=None, output=None):
         self.voice = voice or os.getenv("MAJA_VOICE", DEFAULT_VOICE)
+        self.output = output  # Part of a sound output's name; None means the Windows default.
         self._loaded = {}
         self._loading = threading.Lock()
         self._sentences = queue.Queue()
@@ -229,7 +253,7 @@ class Speaker:
                 chunks = list(voice.synthesize(sentence))
                 if round_ == self._round and chunks:
                     audio = np.concatenate([chunk.audio_float_array for chunk in chunks])
-                    sd.play(audio, chunks[0].sample_rate)
+                    sd.play(audio, chunks[0].sample_rate, device=output_index(self.output))
                     sd.wait()  # Returns early when stop() calls sd.stop().
             except Exception:
                 pass  # A broken sentence shouldn't stop the rest of the reply.

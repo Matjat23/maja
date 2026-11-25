@@ -26,7 +26,8 @@ from maja import Maja, describe_update, task_label
 from reminders import DUE_FORMAT, REPEAT_LABELS, describe_due, first_due, guess_repeat, notify
 from server import SERVER_AVAILABLE, PhoneServer, new_key
 from voice import (NEURAL_VOICE_AVAILABLE, VOICE_INPUT_AVAILABLE, VOICE_OUTPUT_AVAILABLE,
-                   Listener, Speaker, VoiceError, WakeListener, installed_voices)
+                   Listener, Speaker, VoiceError, WakeListener, installed_voices,
+                   output_devices, output_index)
 
 try:
     import qrcode
@@ -89,7 +90,7 @@ def main():
 
     listener = Listener() if VOICE_INPUT_AVAILABLE else None
     camera = Camera() if CAMERA_AVAILABLE else None
-    speaker = Speaker(maja.setting("voice"))
+    speaker = Speaker(maja.setting("voice"), maja.setting("speaker_output"))
     # Only one thing may change Maja's data at a time: the window, the phone, or reminders.
     maja_lock = threading.Lock()
 
@@ -247,6 +248,10 @@ def main():
             append("You", message)
             change_voice(name.strip())
             return
+        if command.lower() in {"speaker", "speakers"}:
+            append("You", message)
+            change_output(name.strip())
+            return
         if message.lower() in {"new phone key", "change phone key"}:
             append("You", message)
             renew_phone_key()
@@ -369,6 +374,34 @@ def main():
         append("Maja", f"Okay, this is my new voice: {matches[0]}.", "maja")
         speaker.speak("Hi Matty! This is how I sound now. Do you like it?")
 
+    def change_output(name):
+        """'speaker' lists the sound outputs; 'speaker realtek' makes Maja talk through that one."""
+        outputs = output_devices()
+        if not outputs:
+            maja_says("I can only use the Windows default sound output right now.")
+            return
+        if not name:
+            current = speaker.output or "the Windows default"
+            maja_says(f"I'm talking through {current}. Sound outputs: {', '.join(outputs)}. "
+                      "Type 'speaker' and a name to switch, for example 'speaker realtek', "
+                      "or 'speaker default' to follow Windows.")
+            return
+        if name.lower() == "default":
+            speaker.output = None
+            maja.change_setting("speaker_output", None)
+            append("Maja", "Okay, I'll use the Windows default sound output.", "maja")
+            speaker.speak("Can you hear me now?")
+            return
+        matches = [output for output in outputs if name.lower() in output.lower()]
+        if len(matches) != 1:
+            maja_says(f"I couldn't find exactly one sound output matching '{name}'. "
+                      f"Sound outputs: {', '.join(outputs)}.")
+            return
+        speaker.output = matches[0]
+        maja.change_setting("speaker_output", matches[0])
+        append("Maja", f"Okay, I'll talk through {matches[0]}.", "maja")
+        speaker.speak("Hi Matty! Can you hear me now?")
+
     # --- "Hey Maja": the ear button listens hands-free, only while it's turned on --------
     wake = None
 
@@ -394,7 +427,7 @@ def main():
             import sounddevice as sd
             t = np.linspace(0, 0.18, int(16000 * 0.18), endpoint=False)
             tone = 0.15 * np.sin(2 * np.pi * 880 * t) * np.exp(-12 * t)
-            sd.play(tone.astype(np.float32), 16000)
+            sd.play(tone.astype(np.float32), 16000, device=output_index(speaker.output))
 
     def toggle_wake():
         nonlocal wake

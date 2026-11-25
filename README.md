@@ -166,6 +166,7 @@ Things to try:
 - `start with windows` / `stop starting with windows`
 - `add to calendar: study group Thursday at 5pm` / `draft email: to my teacher, ask for feedback on my report`
 - `voice` to list the installed voices, `voice amy` to switch
+- `speaker` to list the sound outputs, `speaker realtek` to make her talk through the laptop speakers (`speaker default` follows Windows again)
 - `think: help me plan my thesis chapters` / `search: opening hours of the Chalmers library`
 - `job: make me a 5-day study plan for my exam using my lecture notes`, then `open last job`
 - `research: what do I have this week and what should I prepare?`
